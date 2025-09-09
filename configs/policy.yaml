@@ -1,0 +1,27 @@
+#
+upper_body_policy:
+  body_key: upper_body
+  num_actions: 14
+  num_actor_obs: 482
+  actor_hidden_dims: [512, 256, 128]
+  activation: elu
+
+lower_body_policy:
+  body_key: lower_body
+  num_actions: 15
+  num_actor_obs: 482
+  actor_hidden_dims: [512, 256, 128]
+  activation: elu
+
+residual_whole_body_policy:
+  body_key: residual_whole_body
+  num_actions: 29
+  num_actor_obs: 482
+  num_encoder_obs: 7
+  num_time_steps: 5
+  num_encoder_output: 32
+  actor_hidden_dims: [512, 256, 128]
+  encoder_d_model: 32
+  encoder_nhead: 2
+  encoder_num_layers: 2
+  activation: elu

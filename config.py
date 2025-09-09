@@ -1,6 +1,10 @@
 import numpy as np
 import yaml
+from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).parent.resolve()
+CONFIG_PATH = PROJECT_ROOT / 'configs'
+CHECKPOINT_PATH = PROJECT_ROOT / 'policy' / 'checkpoints'
 
 class Config:
     def __init__(self, file_path) -> None:

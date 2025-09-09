@@ -15,17 +15,15 @@ class ActorCritic(nn.Module):
     
     def __init__(
         self,
-        num_actor_obs,
-        num_critic_obs,
         num_actions,
+        num_actor_obs=482,
         actor_hidden_dims=[512, 256, 128],
-        critic_hidden_dims=[512, 256, 128],
         activation="elu",
         **kwargs,
     ):
         if kwargs:
             print(
-                "ActorCriticEncoder.__init__ got unexpected arguments, which will be ignored: "
+                "ActorCritic.__init__ got unexpected arguments, which will be ignored: "
                 + str([key for key in kwargs.keys()])
             )
         super().__init__()
@@ -33,7 +31,6 @@ class ActorCritic(nn.Module):
         activation = resolve_nn_activation(activation)
 
         mlp_input_dim_a = num_actor_obs
-        mlp_input_dim_c = num_critic_obs
         # Policy
         actor_layers = []
         actor_layers.append(nn.Linear(mlp_input_dim_a, actor_hidden_dims[0]))
@@ -47,22 +44,8 @@ class ActorCritic(nn.Module):
         self.actor = nn.Sequential(*actor_layers)
         self.actor.eval()
 
-        # Value function
-        critic_layers = []
-        critic_layers.append(nn.Linear(mlp_input_dim_c, critic_hidden_dims[0]))
-        critic_layers.append(activation)
-        for layer_index in range(len(critic_hidden_dims)):
-            if layer_index == len(critic_hidden_dims) - 1:
-                critic_layers.append(nn.Linear(critic_hidden_dims[layer_index], 1))
-            else:
-                critic_layers.append(nn.Linear(critic_hidden_dims[layer_index], critic_hidden_dims[layer_index + 1]))
-                critic_layers.append(activation)
-        self.critic = nn.Sequential(*critic_layers)
-        self.critic.eval()
-
 
         print(f"Actor MLP: {self.actor}")
-        print(f"Critic MLP: {self.critic}")
 
         # disable args validation for speedup
         Normal.set_default_validate_args(False)
@@ -82,7 +65,8 @@ class ActorCritic(nn.Module):
         raise NotImplementedError
 
     def act_inference(self, observations):
-        actions_mean = self.actor(observations)
+        with torch.no_grad():
+            actions_mean = self.actor(observations)
         return actions_mean
 
     def load_state_dict(self, state_dict, strict=True):
@@ -98,6 +82,9 @@ class ActorCritic(nn.Module):
                   `OnPolicyRunner` to determine how to load further parameters (relevant for, e.g., distillation).
         """
 
-        super().load_state_dict(state_dict, strict=strict)
+        actor_state_dict = {}
+        for key, value in state_dict.items():
+            if "actor." in key:
+                actor_state_dict[key.replace("actor.", "")] = value
+        self.actor.load_state_dict(actor_state_dict, strict=strict)
         return True
-
