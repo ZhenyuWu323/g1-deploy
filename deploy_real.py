@@ -153,7 +153,7 @@ class Controller:
         
         # imu_state quaternion: w, x, y, z
         quat = self.low_state.imu_state.quaternion
-        ang_vel = np.array([self.low_state.imu_state.gyroscope], dtype=np.float32)
+        ang_vel = np.array(self.low_state.imu_state.gyroscope, dtype=np.float32)
         if self.config.imu_type == "torso":
             # h1 and h1_2 imu is on the torso
             # imu data needs to be transformed to the pelvis frame
@@ -222,11 +222,12 @@ class Controller:
             actions                          # 145 (5 * 29)
         ])
         self.obs = np.clip(self.obs, -self.config.clip_obervation, self.config.clip_obervation)
-
+        print(f"Observation: {self.obs}")
         # Get the action from the policy network
-        obs_tensor = torch.from_numpy(self.obs).unsqueeze(0)
+        obs_tensor = torch.from_numpy(self.obs).float().unsqueeze(0)
         self.action = self.policy_runner.act_base(obs_tensor).detach().numpy().squeeze()
         self.action = np.clip(self.action, -self.config.clip_action, self.config.clip_action)
+        print(f"Action: {self.action}")
         
         # transform action to target_dof_pos
         upper_body_actions = self.action[:self.config.num_upper_actions]
