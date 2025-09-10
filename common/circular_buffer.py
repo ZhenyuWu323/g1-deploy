@@ -3,11 +3,13 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+from typing import Optional
 import torch
 from collections.abc import Sequence
+import numpy as np
 
 
-class CircularBuffer:
+class IsaacCircularBuffer:
     """Circular buffer for storing a history of batched tensor data.
 
     This class implements a circular buffer for storing a history of batched tensor data. The buffer is
@@ -89,7 +91,7 @@ class CircularBuffer:
     Operations.
     """
 
-    def reset(self, batch_ids: Sequence[int] | None = None):
+    def reset(self, batch_ids):
         """Reset the circular buffer at the specified batch indices.
 
         Args:
@@ -164,3 +166,83 @@ class CircularBuffer:
         index_in_buffer = torch.remainder(self._pointer - valid_keys, self.max_length)
         # return output
         return self._buffer[index_in_buffer, self._ALL_INDICES]
+
+
+
+
+
+class CircularBuffer:
+    
+    def __init__(self, max_len: int, data_shape: tuple):
+        """
+        Args:
+            max_len: buffer length
+            data_shape: observation dim
+        """
+        if max_len < 1:
+            raise ValueError(f"Buffer size must be > 0, got {max_len}")
+        
+        self.max_len = max_len
+        self.data_shape = data_shape
+        self.buffer = np.zeros((max_len,) + data_shape, dtype=np.float32)
+        self.pointer = 0
+        self.count = 0
+        self.is_full = False
+    
+    def append(self, data: np.ndarray):
+        """Add new data"""
+        if data.shape != self.data_shape:
+            raise ValueError(f"Expected shape {self.data_shape}, got {data.shape}")
+        
+        self.buffer[self.pointer] = data
+        self.pointer = (self.pointer + 1) % self.max_len
+        
+        if not self.is_full:
+            self.count += 1
+            if self.count == self.max_len:
+                self.is_full = True
+    
+    def get_recent(self, steps_back: int = 0) -> np.ndarray:
+        """Get recent data
+        
+        Args:
+            steps_back: steps to get
+        """
+        if self.count == 0:
+            raise RuntimeError("Buffer is empty")
+    
+        steps_back = min(steps_back, self.count - 1)
+        
+        if self.is_full:
+            index = (self.pointer - 1 - steps_back) % self.max_len
+        else:
+            index = max(0, self.pointer - 1 - steps_back)
+        
+        return self.buffer[index].copy()
+    
+    def get_history(self, num_steps: int) -> np.ndarray:
+        """
+        Get History
+        Returns:
+            shape: (num_steps, *data_shape)
+        """
+        if self.count == 0:
+            raise RuntimeError("Buffer is empty")
+        
+        num_steps = min(num_steps, self.count)
+        history = np.zeros((num_steps,) + self.data_shape, dtype=np.float32)
+        
+        for i in range(num_steps):
+            history[i] = self.get_recent(num_steps - 1 - i)
+        
+        return history
+    
+    def reset(self):
+        self.pointer = 0
+        self.count = 0
+        self.is_full = False
+        self.buffer.fill(0)
+    
+    @property
+    def current_length(self) -> int:
+        return self.count

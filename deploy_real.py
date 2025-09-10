@@ -1,4 +1,3 @@
-#from legged_gym import LEGGED_GYM_ROOT_DIR
 from typing import Union
 import numpy as np
 import time
@@ -18,6 +17,8 @@ from common.command_helper import create_damping_cmd, create_zero_cmd, init_cmd_
 from common.rotation_helper import get_gravity_orientation, transform_imu_data
 from common.remote_controller import RemoteController, KeyMap
 from config import Config
+from policy.policy_runner import ResidualPolicyRunner
+from common.circular_buffer import CircularBuffer
 
 
 class Controller:
@@ -26,15 +27,23 @@ class Controller:
         self.remote_controller = RemoteController()
 
         # Initialize the policy network
-        self.policy = torch.jit.load(config.policy_path)
+        self.policy_runner = ResidualPolicyRunner()
         # Initializing process variables
-        self.qj = np.zeros(config.num_actions, dtype=np.float32)
-        self.dqj = np.zeros(config.num_actions, dtype=np.float32)
+        #self.qj = np.zeros(config.num_actions, dtype=np.float32)
+        #self.dqj = np.zeros(config.num_actions, dtype=np.float32)
         self.action = np.zeros(config.num_actions, dtype=np.float32)
-        self.target_dof_pos = config.default_angles.copy()
+        self.upper_body_target = config.upper_body_default_pos.copy()
         self.obs = np.zeros(config.num_obs, dtype=np.float32)
         self.cmd = np.array([0.0, 0, 0])
         self.counter = 0
+
+        # Initialize circular buffer
+        self.joint_pos_buff = CircularBuffer(max_len=config.history_length, data_shape=(config.num_actions,))
+        self.joint_vel_buff = CircularBuffer(max_len=config.history_length, data_shape=(config.num_actions,))
+        self.action_buff = CircularBuffer(max_len=config.history_length, data_shape=(config.num_actions,))
+        self.ang_vel_buff = CircularBuffer(max_len=config.history_length, data_shape=(3,))
+        self.projected_gravity_buff = CircularBuffer(max_len=config.history_length, data_shape=(3,))
+
 
         if config.msg_type == "hg":
             # g1 and h1_2 use the hg msg type
@@ -104,10 +113,10 @@ class Controller:
         total_time = 2
         num_step = int(total_time / self.config.control_dt)
         
-        dof_idx = self.config.leg_joint2motor_idx + self.config.arm_waist_joint2motor_idx
-        kps = self.config.kps + self.config.arm_waist_kps
-        kds = self.config.kds + self.config.arm_waist_kds
-        default_pos = np.concatenate((self.config.default_angles, self.config.arm_waist_target), axis=0)
+        dof_idx = self.config.upper_body_joint2motor_idx + self.config.lower_body_joint2motor_idx
+        kps = self.config.upper_body_kps + self.config.lower_body_kps
+        kds = self.config.upper_body_kds + self.config.lower_body_kds
+        default_pos = np.concatenate((self.config.upper_body_default_pos, self.config.lower_body_default_pos), axis=0)
         dof_size = len(dof_idx)
         
         # record the current pos
@@ -129,94 +138,120 @@ class Controller:
             self.send_cmd(self.low_cmd)
             time.sleep(self.config.control_dt)
 
-    def default_pos_state(self):
-        print("Enter default pos state.")
-        print("Waiting for the Button A signal...")
-        while self.remote_controller.button[KeyMap.A] != 1:
-            for i in range(len(self.config.leg_joint2motor_idx)):
-                motor_idx = self.config.leg_joint2motor_idx[i]
-                self.low_cmd.motor_cmd[motor_idx].q = self.config.default_angles[i]
-                self.low_cmd.motor_cmd[motor_idx].qd = 0
-                self.low_cmd.motor_cmd[motor_idx].kp = self.config.kps[i]
-                self.low_cmd.motor_cmd[motor_idx].kd = self.config.kds[i]
-                self.low_cmd.motor_cmd[motor_idx].tau = 0
-            for i in range(len(self.config.arm_waist_joint2motor_idx)):
-                motor_idx = self.config.arm_waist_joint2motor_idx[i]
-                self.low_cmd.motor_cmd[motor_idx].q = self.config.arm_waist_target[i]
-                self.low_cmd.motor_cmd[motor_idx].qd = 0
-                self.low_cmd.motor_cmd[motor_idx].kp = self.config.arm_waist_kps[i]
-                self.low_cmd.motor_cmd[motor_idx].kd = self.config.arm_waist_kds[i]
-                self.low_cmd.motor_cmd[motor_idx].tau = 0
-            self.send_cmd(self.low_cmd)
-            time.sleep(self.config.control_dt)
 
-    def run(self):
-        self.counter += 1
-        # Get the current joint position and velocity
-        for i in range(len(self.config.leg_joint2motor_idx)):
-            self.qj[i] = self.low_state.motor_state[self.config.leg_joint2motor_idx[i]].q
-            self.dqj[i] = self.low_state.motor_state[self.config.leg_joint2motor_idx[i]].dq
+    def get_obs(self):
+        # joint pos and joint vel
+        q_t =  np.zeros(config.num_actions, dtype=np.float32)
+        dq_t = np.zeros(config.num_actions, dtype=np.float32)
 
+        for i in range(len(self.config.whole_body_joint2motor_idx)):
+            q_t[i] = self.low_state.motor_state[self.config.whole_body_joint2motor_idx[i]].q
+            dq_t[i] = self.low_state.motor_state[self.config.whole_body_joint2motor_idx[i]].dq
+
+        q_t = (q_t - self.config.whole_body_default_pos) * self.config.dof_pos_scale
+        dq_t = dq_t * self.config.dof_vel_scale
+        
         # imu_state quaternion: w, x, y, z
         quat = self.low_state.imu_state.quaternion
         ang_vel = np.array([self.low_state.imu_state.gyroscope], dtype=np.float32)
-
         if self.config.imu_type == "torso":
             # h1 and h1_2 imu is on the torso
             # imu data needs to be transformed to the pelvis frame
             waist_yaw = self.low_state.motor_state[self.config.arm_waist_joint2motor_idx[0]].q
             waist_yaw_omega = self.low_state.motor_state[self.config.arm_waist_joint2motor_idx[0]].dq
             quat, ang_vel = transform_imu_data(waist_yaw=waist_yaw, waist_yaw_omega=waist_yaw_omega, imu_quat=quat, imu_omega=ang_vel)
-
-        # create observation
-        gravity_orientation = get_gravity_orientation(quat)
-        qj_obs = self.qj.copy()
-        dqj_obs = self.dqj.copy()
-        qj_obs = (qj_obs - self.config.default_angles) * self.config.dof_pos_scale
-        dqj_obs = dqj_obs * self.config.dof_vel_scale
         ang_vel = ang_vel * self.config.ang_vel_scale
-        period = 0.8
-        count = self.counter * self.config.control_dt
-        phase = count % period / period
-        sin_phase = np.sin(2 * np.pi * phase)
-        cos_phase = np.cos(2 * np.pi * phase)
+
+        # projected gravity
+        gravity_orientation = get_gravity_orientation(quat)
+
+        # add to history
+        self.joint_pos_buff.append(q_t)
+        self.joint_vel_buff.append(dq_t)
+        self.ang_vel_buff.append(ang_vel)
+        self.projected_gravity_buff.append(gravity_orientation)
+        self.action_buff.append(self.action.copy())
+
+    def default_pos_state(self):
+        print("Enter default pos state.")
+        print("Waiting for the Button A signal...")
+        while self.remote_controller.button[KeyMap.A] != 1:
+            # update obs
+            self.get_obs()
+            # set upper body
+            for i in range(len(self.config.upper_body_joint2motor_idx)):
+                motor_idx = self.config.upper_body_joint2motor_idx[i]
+                self.low_cmd.motor_cmd[motor_idx].q = self.config.upper_body_default_pos[i]
+                self.low_cmd.motor_cmd[motor_idx].qd = 0
+                self.low_cmd.motor_cmd[motor_idx].kp = self.config.upper_body_kps[i]
+                self.low_cmd.motor_cmd[motor_idx].kd = self.config.upper_body_kds[i]
+                self.low_cmd.motor_cmd[motor_idx].tau = 0
+
+            # set lower body
+            for i in range(len(self.config.lower_body_joint2motor_idx)):
+                motor_idx = self.config.lower_body_joint2motor_idx[i]
+                self.low_cmd.motor_cmd[motor_idx].q = self.config.lower_body_default_pos[i]
+                self.low_cmd.motor_cmd[motor_idx].qd = 0
+                self.low_cmd.motor_cmd[motor_idx].kp = self.config.lower_body_kps[i]
+                self.low_cmd.motor_cmd[motor_idx].kd = self.config.lower_body_kds[i]
+                self.low_cmd.motor_cmd[motor_idx].tau = 0
+            self.send_cmd(self.low_cmd)
+            time.sleep(self.config.control_dt)
+
+    def run(self):
+        self.counter += 1
+        # get obs
+        self.get_obs()
+        joint_pos = self.joint_pos_buff.get_history(self.config.history_length).flatten()
+        joint_vel = self.joint_vel_buff.get_history(self.config.history_length).flatten()
+        ang_vel = self.ang_vel_buff.get_history(self.config.history_length).flatten()
+        projected_gravity = self.projected_gravity_buff.get_history(self.config.history_length).flatten()
+        actions = self.action_buff.get_history(self.config.history_length).flatten()
 
         self.cmd[0] = self.remote_controller.ly
         self.cmd[1] = self.remote_controller.lx * -1
         self.cmd[2] = self.remote_controller.rx * -1
 
-        num_actions = self.config.num_actions
-        self.obs[:3] = ang_vel
-        self.obs[3:6] = gravity_orientation
-        self.obs[6:9] = self.cmd * self.config.cmd_scale * self.config.max_cmd
-        self.obs[9 : 9 + num_actions] = qj_obs
-        self.obs[9 + num_actions : 9 + num_actions * 2] = dqj_obs
-        self.obs[9 + num_actions * 2 : 9 + num_actions * 3] = self.action
-        self.obs[9 + num_actions * 3] = sin_phase
-        self.obs[9 + num_actions * 3 + 1] = cos_phase
+        self.obs = np.concatenate([
+            ang_vel,                        # 15 (5 * 3)
+            projected_gravity,              # 15 (5 * 3)  
+            self.cmd * self.config.cmd_scale * self.config.max_cmd,                       # 3
+            self.upper_body_target,  # 14
+            joint_pos,                      # 145 (5 * 29)
+            joint_vel,                      # 145 (5 * 29)
+            actions                          # 145 (5 * 29)
+        ])
+        self.obs = np.clip(self.obs, -self.config.clip_obervation, self.config.clip_obervation)
 
         # Get the action from the policy network
         obs_tensor = torch.from_numpy(self.obs).unsqueeze(0)
-        self.action = self.policy(obs_tensor).detach().numpy().squeeze()
+        self.action = self.policy_runner.act_base(obs_tensor).detach().numpy().squeeze()
+        self.action = np.clip(self.action, -self.config.clip_action, self.config.clip_action)
         
         # transform action to target_dof_pos
-        target_dof_pos = self.config.default_angles + self.action * self.config.action_scale
+        upper_body_actions = self.action[:self.config.num_upper_actions]
+        upper_body_target = self.config.upper_body_default_pos + upper_body_actions * self.config.action_scale
 
+        lower_body_actions = self.action[self.config.num_upper_actions:]
+        lower_body_target = self.config.lower_body_default_pos + lower_body_actions * self.config.action_scale
+        
         # Build low cmd
-        for i in range(len(self.config.leg_joint2motor_idx)):
-            motor_idx = self.config.leg_joint2motor_idx[i]
-            self.low_cmd.motor_cmd[motor_idx].q = target_dof_pos[i]
-            self.low_cmd.motor_cmd[motor_idx].qd = 0
-            self.low_cmd.motor_cmd[motor_idx].kp = self.config.kps[i]
-            self.low_cmd.motor_cmd[motor_idx].kd = self.config.kds[i]
-            self.low_cmd.motor_cmd[motor_idx].tau = 0
 
-        for i in range(len(self.config.arm_waist_joint2motor_idx)):
-            motor_idx = self.config.arm_waist_joint2motor_idx[i]
-            self.low_cmd.motor_cmd[motor_idx].q = self.config.arm_waist_target[i]
+        # Upper body
+        for i in range(len(self.config.upper_body_joint2motor_idx)):
+            motor_idx = self.config.upper_body_joint2motor_idx[i]
+            self.low_cmd.motor_cmd[motor_idx].q = upper_body_target[i]
             self.low_cmd.motor_cmd[motor_idx].qd = 0
-            self.low_cmd.motor_cmd[motor_idx].kp = self.config.arm_waist_kps[i]
-            self.low_cmd.motor_cmd[motor_idx].kd = self.config.arm_waist_kds[i]
+            self.low_cmd.motor_cmd[motor_idx].kp = self.config.upper_body_kps[i]
+            self.low_cmd.motor_cmd[motor_idx].kd = self.config.upper_body_kds[i]
+            self.low_cmd.motor_cmd[motor_idx].tau = 0
+        # Lower Body
+        for i in range(len(self.config.lower_body_joint2motor_idx)):
+            motor_idx = self.config.lower_body_joint2motor_idx[i]
+            self.low_cmd.motor_cmd[motor_idx].q = lower_body_target[i]
+            self.low_cmd.motor_cmd[motor_idx].qd = 0
+            self.low_cmd.motor_cmd[motor_idx].kp = self.config.lower_body_kps[i]
+            self.low_cmd.motor_cmd[motor_idx].kd = self.config.lower_body_kds[i]
             self.low_cmd.motor_cmd[motor_idx].tau = 0
 
         # send the command
@@ -230,12 +265,12 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("net", type=str, help="network interface")
-    parser.add_argument("config", type=str, help="config file name in the configs folder", default="g1.yaml")
+    #parser.add_argument("config", type=str, help="config file name in the configs folder", default="g1.yaml")
     args = parser.parse_args()
 
     # Load config
-    config_path = f"{LEGGED_GYM_ROOT_DIR}/deploy/deploy_real/configs/{args.config}"
-    config = Config(config_path)
+    #config_path = f"{LEGGED_GYM_ROOT_DIR}/deploy/deploy_real/configs/{args.config}"
+    config = Config()
 
     # Initialize DDS communication
     ChannelFactoryInitialize(0, args.net)

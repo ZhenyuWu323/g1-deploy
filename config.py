@@ -7,7 +7,9 @@ CONFIG_PATH = PROJECT_ROOT / 'configs'
 CHECKPOINT_PATH = PROJECT_ROOT / 'policy' / 'checkpoints'
 
 class Config:
-    def __init__(self, file_path) -> None:
+    def __init__(self) -> None:
+        file_path = CONFIG_PATH / 'g1.yaml'
+        assert file_path.exists(), f"Config {file_path} doesn't exists"
         with open(file_path, "r") as f:
             config = yaml.load(f, Loader=yaml.FullLoader)
 
@@ -23,17 +25,23 @@ class Config:
             self.lowcmd_topic = config["lowcmd_topic"]
             self.lowstate_topic = config["lowstate_topic"]
 
-            self.policy_path = config["policy_path"].replace("{LEGGED_GYM_ROOT_DIR}", LEGGED_GYM_ROOT_DIR)
+            # Upper Body
+            self.upper_body_joint2motor_idx = config["upper_body_joint2motor_idx"]
+            self.upper_body_kps = config["upper_body_kps"]
+            self.upper_body_kds = config["upper_body_kds"]
+            self.upper_body_default_pos = np.array(config["upper_body_default_pos"], dtype=np.float32)
+            self.num_upper_actions = config["num_upper_actions"]
 
-            self.leg_joint2motor_idx = config["leg_joint2motor_idx"]
-            self.kps = config["kps"]
-            self.kds = config["kds"]
-            self.default_angles = np.array(config["default_angles"], dtype=np.float32)
+            # Lower Body
+            self.lower_body_joint2motor_idx = config["lower_body_joint2motor_idx"]
+            self.lower_body_kps = config["lower_body_kps"]
+            self.lower_body_kds = config["lower_body_kds"]
+            self.lower_body_default_pos = np.array(config["lower_body_default_pos"], dtype=np.float32)
+            self.num_lower_actions = config["num_lower_actions"]
 
-            self.arm_waist_joint2motor_idx = config["arm_waist_joint2motor_idx"]
-            self.arm_waist_kps = config["arm_waist_kps"]
-            self.arm_waist_kds = config["arm_waist_kds"]
-            self.arm_waist_target = np.array(config["arm_waist_target"], dtype=np.float32)
+            # Whole Body
+            self.whole_body_joint2motor_idx = config["whole_body_joint2motor_idx"]
+            self.whole_body_default_pos = np.array(config["whole_body_default_pos"], dtype=np.float32)
 
             self.ang_vel_scale = config["ang_vel_scale"]
             self.dof_pos_scale = config["dof_pos_scale"]
@@ -44,3 +52,6 @@ class Config:
 
             self.num_actions = config["num_actions"]
             self.num_obs = config["num_obs"]
+            self.clip_action = config["clip_action"]
+            self.clip_obervation = config["clip_observation"]
+            self.history_length = config["history_length"]
