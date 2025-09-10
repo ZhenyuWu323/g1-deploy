@@ -2,6 +2,7 @@ from policy.policy_runner import ResidualPolicyRunner
 from common.circular_buffer import CircularBuffer, IsaacCircularBuffer
 import torch
 import numpy as np
+from policy.policy_runner import ResidualPolicyRunner
 
 
 def test_buffer_order():
@@ -141,3 +142,4 @@ def test_buffer_order():
 
 if __name__ == "__main__":
     test_buffer_order()
+    runner = ResidualPolicyRunner()
