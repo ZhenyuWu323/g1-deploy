@@ -212,12 +212,13 @@ if __name__ == "__main__":
                 )
 
 
-                gravity_orientation = get_gravity_orientation(torso_quat)
-                torso_ang_vel = torso_ang_vel * ang_vel_scale
+                gravity_orientation = get_gravity_orientation(quat)
+                #torso_ang_vel = torso_ang_vel * ang_vel_scale
+                omega = omega * ang_vel_scale
 
                 count = counter * simulation_dt
 
-                obs[:3] = torso_ang_vel
+                obs[:3] = omega
                 obs[3:6] = gravity_orientation
                 obs[6:9] = cmd * cmd_scale
                 obs[9 : 9 + num_actions] = qj[xml_to_policy]
