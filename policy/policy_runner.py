@@ -11,7 +11,7 @@ class ResidualPolicyRunner():
 
     def __init__(self):
         # load configs and checkpoints
-        self.checkpoint = CHECKPOINT_PATH / 'residual.pt'
+        self.checkpoint = CHECKPOINT_PATH / 'model_1700.pt'
         self.policy_cfg = CONFIG_PATH / 'policy.yaml'
         assert self.checkpoint.exists(), f"Checkpoint not found: {self.checkpoint}"
         assert self.policy_cfg.exists(), f"Config file not found: {self.policy_cfg}"
@@ -54,27 +54,27 @@ class ResidualPolicyRunner():
             if load_lower:
                 print('[INFO]: Load Lower Body Policy')
 
-            self.residual_wbc_policy = ResidualAdaptiveModule(
-                num_actions = residual_wbc_cfg['num_actions'],
-                num_actor_obs = residual_wbc_cfg['num_actor_obs'],
-                num_encoder_obs = residual_wbc_cfg['num_encoder_obs'],
-                num_time_steps = residual_wbc_cfg['num_time_steps'],
-                num_encoder_output = residual_wbc_cfg['num_encoder_output'],
-                actor_hidden_dims = residual_wbc_cfg['actor_hidden_dims'],
-                encoder_d_model = residual_wbc_cfg['encoder_d_model'],
-                encoder_nhead = residual_wbc_cfg['encoder_nhead'],
-                encoder_num_layers = residual_wbc_cfg['encoder_num_layers'],
-                activation = residual_wbc_cfg['activation']
-            )
-            load_residual = self.residual_wbc_policy.load_state_dict(loaded_dict[f"model_state_dict_{residual_wbc_cfg['body_key']}"])
-            if load_residual:
-                print('[INFO]: Load Residual WBC Policy')
+            # self.residual_wbc_policy = ResidualAdaptiveModule(
+            #     num_actions = residual_wbc_cfg['num_actions'],
+            #     num_actor_obs = residual_wbc_cfg['num_actor_obs'],
+            #     num_encoder_obs = residual_wbc_cfg['num_encoder_obs'],
+            #     num_time_steps = residual_wbc_cfg['num_time_steps'],
+            #     num_encoder_output = residual_wbc_cfg['num_encoder_output'],
+            #     actor_hidden_dims = residual_wbc_cfg['actor_hidden_dims'],
+            #     encoder_d_model = residual_wbc_cfg['encoder_d_model'],
+            #     encoder_nhead = residual_wbc_cfg['encoder_nhead'],
+            #     encoder_num_layers = residual_wbc_cfg['encoder_num_layers'],
+            #     activation = residual_wbc_cfg['activation']
+            # )
+            # load_residual = self.residual_wbc_policy.load_state_dict(loaded_dict[f"model_state_dict_{residual_wbc_cfg['body_key']}"])
+            # if load_residual:
+            #     print('[INFO]: Load Residual WBC Policy')
 
         self.lower_body_policy.eval()
         self.upper_body_policy.eval()
-        self.residual_wbc_policy.eval()
+        #self.residual_wbc_policy.eval()
 
-        assert load_upper and load_lower and load_residual, 'Failed to load Checkpoint'
+        #assert load_upper and load_lower and load_residual, 'Failed to load Checkpoint'
 
 
     def act_base(self, obs):

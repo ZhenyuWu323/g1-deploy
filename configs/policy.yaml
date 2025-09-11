@@ -2,14 +2,14 @@
 upper_body_policy:
   body_key: upper_body
   num_actions: 14
-  num_actor_obs: 482
+  num_actor_obs: 480
   actor_hidden_dims: [512, 256, 128]
   activation: elu
 
 lower_body_policy:
   body_key: lower_body
   num_actions: 15
-  num_actor_obs: 482
+  num_actor_obs: 480
   actor_hidden_dims: [512, 256, 128]
   activation: elu
 

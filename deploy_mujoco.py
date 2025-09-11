@@ -55,8 +55,8 @@ if __name__ == "__main__":
 
         # idx: sim order, value: real motor id
         lower_body_joint2motor_idx=[12, 13, 14, 0, 6, 1, 7, 2, 8, 3, 9, 4, 10, 5, 11]
-        lower_body_kps=[200, 200, 200, 100, 100, 100, 100, 100, 100, 150, 150, 40, 40, 40, 40]
-        lower_body_kds=[5, 5, 5, 2, 2, 2, 2, 2, 2, 2, 2, 4, 4, 2, 2]
+        lower_body_kps= [200, 40, 40, 100, 100, 100, 100, 100, 100, 150, 150, 40, 40, 40, 40]
+        lower_body_kds= [5, 5, 5, 2, 2, 2, 2, 2, 2, 4, 4, 2, 2, 2, 2]
         lower_body_default_pos=[0, 0, 0, -0.1, -0.1, 0, 0, 0, 0, 0.3, 0.3, -0.2, -0.2, 0, 0] #TODO: print check
 
         # idx: sim order, value: real motor id
@@ -76,8 +76,7 @@ if __name__ == "__main__":
         cmd_scale = np.array(config["cmd_scale"], dtype=np.float32)
 
         num_actions = config["num_actions"]
-        #num_obs = config["num_obs"]
-        num_obs = 93
+        num_obs = config["num_obs"]
         
         cmd = np.array(config["cmd_init"], dtype=np.float32)
 
@@ -220,26 +219,26 @@ if __name__ == "__main__":
 
                 obs[:3] = torso_ang_vel
                 obs[3:6] = gravity_orientation
-                #obs[6:9] = cmd * cmd_scale
-                obs[6 : 6 + num_actions] = qj[xml_to_policy]
-                obs[6 + num_actions : 6 + 2 * num_actions] = dqj[xml_to_policy]
-                obs[6 + 2 * num_actions : 6 + 3 * num_actions] = action
+                obs[6:9] = cmd * cmd_scale
+                obs[9 : 9 + num_actions] = qj[xml_to_policy]
+                obs[9 + num_actions : 9 + 2 * num_actions] = dqj[xml_to_policy]
+                obs[9 + 2 * num_actions : 9 + 3 * num_actions] = action
 
                 frame_stack.append(obs.copy())
                 stacked_obs = np.concatenate(frame_stack, axis=0)
                 
                 
-                obs_omega = np.asarray(stacked_obs).reshape(5, 93)[:, 0:3].reshape(-1)
-                obs_gravity_orientation = np.asarray(stacked_obs).reshape(5, 93)[:, 3:6].reshape(-1)
-                #obs_cmd = np.asarray(stacked_obs).reshape(5, 93)[:, 6:9].reshape(-1)
-                obs_pos = np.asarray(stacked_obs).reshape(5, 93)[:, 6:6 + num_actions].reshape(-1)
-                obs_vel = np.asarray(stacked_obs).reshape(5, 93)[:, 6 + num_actions : 6 + 2 * num_actions].reshape(-1)
-                obs_action = np.asarray(stacked_obs).reshape(5, 93)[:, 6 + 2 * num_actions : 6 + 3 * num_actions].reshape(-1)
+                obs_omega = np.asarray(stacked_obs).reshape(5, 96)[:, 0:3].reshape(-1)
+                obs_gravity_orientation = np.asarray(stacked_obs).reshape(5, 96)[:, 3:6].reshape(-1)
+                obs_cmd = np.asarray(stacked_obs).reshape(5, 96)[:, 6:9].reshape(-1)
+                obs_pos = np.asarray(stacked_obs).reshape(5, 96)[:, 9:9 + num_actions].reshape(-1)
+                obs_vel = np.asarray(stacked_obs).reshape(5, 96)[:, 9 + num_actions : 9 + 2 * num_actions].reshape(-1)
+                obs_action = np.asarray(stacked_obs).reshape(5, 96)[:, 9 + 2 * num_actions : 9 + 3 * num_actions].reshape(-1)
                 big_group_major = np.concatenate([
                     obs_omega,
                     obs_gravity_orientation,
-                    cmd * cmd_scale,
-                    upper_body_default_pos,
+                    obs_cmd,
+                    #upper_body_default_pos,
                     obs_pos,
                     obs_vel,
                     obs_action,
