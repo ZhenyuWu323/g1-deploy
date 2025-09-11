@@ -7,6 +7,7 @@ import numpy as np
 import torch
 import yaml
 from collections import deque
+from common.rotation_helper import transform_imu_data_pelvis_to_torso
 from policy.policy_runner import ResidualPolicyRunner
 from config import CONFIG_PATH
 
@@ -200,12 +201,24 @@ if __name__ == "__main__":
 
                 qj = (qj - default_angles) * dof_pos_scale
                 dqj = dqj * dof_vel_scale
-                gravity_orientation = get_gravity_orientation(quat)
-                omega = omega * ang_vel_scale
+
+                waist_yaw = d.qpos[7:][12]
+                waist_yaw_omega = d.qvel[6:][12]
+
+                torso_quat, torso_ang_vel = transform_imu_data_pelvis_to_torso(
+                    waist_yaw=waist_yaw, 
+                    waist_yaw_omega=waist_yaw_omega, 
+                    pelvis_quat=quat, 
+                    pelvis_omega=omega
+                )
+
+
+                gravity_orientation = get_gravity_orientation(torso_quat)
+                torso_ang_vel = torso_ang_vel * ang_vel_scale
 
                 count = counter * simulation_dt
 
-                obs[:3] = omega
+                obs[:3] = torso_ang_vel
                 obs[3:6] = gravity_orientation
                 #obs[6:9] = cmd * cmd_scale
                 obs[6 : 6 + num_actions] = qj[xml_to_policy]
