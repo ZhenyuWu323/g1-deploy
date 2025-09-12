@@ -41,6 +41,7 @@ class Config:
 
             # Whole Body
             self.whole_body_joint2motor_idx = config["whole_body_joint2motor_idx"]
+            self.whole_body_motor2joint_idx = config["whole_body_motor2joint_idx"]
             self.whole_body_default_pos = np.array(config["whole_body_default_pos"], dtype=np.float32)
 
             self.ang_vel_scale = config["ang_vel_scale"]

@@ -43,7 +43,7 @@ class Controller:
         self.action_buff = CircularBuffer(max_len=config.history_length, data_shape=(config.num_actions,))
         self.ang_vel_buff = CircularBuffer(max_len=config.history_length, data_shape=(3,))
         self.projected_gravity_buff = CircularBuffer(max_len=config.history_length, data_shape=(3,))
-
+        self.vel_command_buff = CircularBuffer(max_len=config.history_length, data_shape=(3,))
 
         if config.msg_type == "hg":
             # g1 and h1_2 use the hg msg type
@@ -141,8 +141,8 @@ class Controller:
 
     def get_obs(self):
         # joint pos and joint vel
-        q_t =  np.zeros(config.num_actions, dtype=np.float32)
-        dq_t = np.zeros(config.num_actions, dtype=np.float32)
+        q_t =  np.zeros(self.config.num_actions, dtype=np.float32)
+        dq_t = np.zeros(self.config.num_actions, dtype=np.float32)
 
         for i in range(len(self.config.whole_body_joint2motor_idx)):
             q_t[i] = self.low_state.motor_state[self.config.whole_body_joint2motor_idx[i]].q
@@ -165,11 +165,15 @@ class Controller:
         # projected gravity
         gravity_orientation = get_gravity_orientation(quat)
 
+        # command
+        cmd = self.cmd * self.config.cmd_scale * self.config.max_cmd
+
         # add to history
         self.joint_pos_buff.append(q_t)
         self.joint_vel_buff.append(dq_t)
         self.ang_vel_buff.append(ang_vel)
         self.projected_gravity_buff.append(gravity_orientation)
+        self.vel_command_buff.append(cmd)
         self.action_buff.append(self.action.copy())
 
     def default_pos_state(self):
@@ -207,6 +211,7 @@ class Controller:
         ang_vel = self.ang_vel_buff.get_history(self.config.history_length).flatten()
         projected_gravity = self.projected_gravity_buff.get_history(self.config.history_length).flatten()
         actions = self.action_buff.get_history(self.config.history_length).flatten()
+        vel_command = self.vel_command_buff.get_history(self.config.history_length).flatten()
 
         self.cmd[0] = self.remote_controller.ly
         self.cmd[1] = self.remote_controller.lx * -1
@@ -215,8 +220,9 @@ class Controller:
         self.obs = np.concatenate([
             ang_vel,                        # 15 (5 * 3)
             projected_gravity,              # 15 (5 * 3)  
-            self.cmd * self.config.cmd_scale * self.config.max_cmd,                       # 3
-            self.upper_body_target,  # 14
+            #self.cmd * self.config.cmd_scale * self.config.max_cmd,                       # 3
+            #self.upper_body_target,  # 14
+            vel_command,
             joint_pos,                      # 145 (5 * 29)
             joint_vel,                      # 145 (5 * 29)
             actions                          # 145 (5 * 29)
