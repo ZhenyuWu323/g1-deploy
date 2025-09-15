@@ -51,7 +51,10 @@ if __name__ == "__main__":
         upper_body_joint2motor_idx = [15, 22, 16, 23, 17, 24, 18, 25, 19, 26, 20, 27, 21, 28]
         upper_body_kps=[40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40]
         upper_body_kds=[10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
-        upper_body_default_pos=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] #TODO: print check
+        #upper_body_default_pos=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] #TODO: print check
+        
+        upper_body_default_pos=[ 0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,
+         -1.5700,  1.5700,  0.0000,  0.0000,  0.0000,  0.0000] #TODO: print check
 
         # idx: sim order, value: real motor id
         lower_body_joint2motor_idx=[12, 13, 14, 0, 6, 1, 7, 2, 8, 3, 9, 4, 10, 5, 11]
