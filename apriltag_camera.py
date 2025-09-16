@@ -130,7 +130,7 @@ class AprilTagDetector:
         # Apply coordinate transformation if enabled
         if self.coordinate_transform:
             position = self.transform_matrix @ position
-            rotation_matrix = self.transform_matrix @ rotation_matrix @ self.transform_matrix.T
+            rotation_matrix = self.transform_matrix @ rotation_matrix
         
         # Convert rotation matrix to quaternion (w, x, y, z)
         r = Rotation.from_matrix(rotation_matrix)

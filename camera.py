@@ -82,6 +82,24 @@ def draw_pose(overlay, camera_params, tag_size, pose, z_sign=1):
         cv2.line(overlay, ipoints[i], ipoints[j], (0, 255, 0), 1, 16)
 
 
+def draw_tag_axes(img, pose, camera_params):
+    
+    fx, fy, cx, cy = camera_params
+    K = np.array([[fx, 0,  cx],
+                  [0,  fy, cy],
+                  [0,  0,  1]], dtype=float)
+
+
+    R_ct = pose[:3, :3]
+    t_ct = pose[:3, 3]
+    rvec, _ = cv2.Rodrigues(R_ct)
+    tvec = t_ct.reshape(3,)
+
+    dcoeffs = np.array(intrinsics.coeffs[:5], dtype=float)
+
+    cv2.drawFrameAxes(img, K, dcoeffs, rvec, tvec, length=tag_size*0.75, thickness=2)
+
+
 try:
     while True:
         # Wait for a coherent pair of frames: depth and color
@@ -115,6 +133,9 @@ try:
                 pose=pose
             )
 
+            # NOTE: RAW pose
+            draw_tag_axes(color_image, pose, camera_params)
+
             # print(detection.tostring(
             #         collections.OrderedDict([('Pose',pose),
             #                                  ('InitError', e0),
@@ -129,7 +150,11 @@ try:
                 [0, -1,  0]   
             ])
             position = transform @ position
-            rotation_matrix = transform @ rotation_matrix @ transform.T
+            rotation_matrix = transform @ rotation_matrix #@ transform.T
+            tansformed_pose = np.eye(4)
+            tansformed_pose[:3, :3] = rotation_matrix
+            tansformed_pose[:3, 3] = position
+            # draw_tag_axes(color_image, tansformed_pose, camera_params, axis_len=tag_size*0.75, thickness=2)
 
             
             r = Rotation.from_matrix(rotation_matrix)
