@@ -10,6 +10,8 @@ from collections import deque
 from common.rotation_helper import transform_imu_data_pelvis_to_torso
 from policy.policy_runner import ResidualPolicyRunner
 from config import CONFIG_PATH
+from apriltag_camera import AprilTagDetector
+from common.circular_buffer import CircularBuffer
 
 
 def get_gravity_orientation(quaternion):
@@ -85,7 +87,9 @@ if __name__ == "__main__":
 
     # define context variables
     action = np.zeros(num_actions, dtype=np.float32)
+    residual_action = np.zeros(num_actions, dtype=np.float32)
     obs = np.zeros(num_obs, dtype=np.float32)
+    residual_action_buff = CircularBuffer(max_len=5, data_shape=(num_actions,))
 
     counter = 0
 
@@ -145,6 +149,7 @@ if __name__ == "__main__":
 
     frame_stack = deque(maxlen=5)
     for _ in range(5):
+        residual_action_buff.append(residual_action.copy())
         frame_stack.append(obs.copy())
         mujoco.mj_step(m, d) 
 
@@ -153,6 +158,9 @@ if __name__ == "__main__":
     #policy = torch.jit.load(policy_path)
 
     policy_runner = ResidualPolicyRunner()
+    apriltag_detector = AprilTagDetector()
+    apriltag_detector.start()
+    time.sleep(2)
 
     with mujoco.viewer.launch_passive(m, d) as viewer:
         # Close the viewer automatically after simulation_duration wall-seconds.
@@ -230,6 +238,7 @@ if __name__ == "__main__":
 
                 frame_stack.append(obs.copy())
                 stacked_obs = np.concatenate(frame_stack, axis=0)
+                residual_action_buff.append(residual_action)
                 
                 
                 obs_omega = np.asarray(stacked_obs).reshape(5, 96)[:, 0:3].reshape(-1)
@@ -249,13 +258,34 @@ if __name__ == "__main__":
                 ], axis=0)
                 big_group_major = np.clip(big_group_major, -100, 100)
                 obs_tensor = torch.from_numpy(big_group_major).float().unsqueeze(0)
+
+
+                obs_residual_action = residual_action_buff.get_history(5).flatten()
+                residual_actor_obs = np.concatenate([
+                    obs_omega,
+                    obs_gravity_orientation,
+                    obs_cmd,
+                    #upper_body_default_pos,
+                    obs_pos,
+                    obs_vel,
+                    obs_residual_action
+                ])
+                residual_actor_obs = np.clip(residual_actor_obs, -100, 100)
+                residual_obs_tensor = torch.from_numpy(residual_actor_obs).float().unsqueeze(0)
                 
+                object_pos = apriltag_detector.get_object_obs()
+                #print(object_pos)
+                object_tensor = torch.from_numpy(object_pos).float().unsqueeze(0)
 
                 # policy inference
+                residual_action = policy_runner.act_residual(residual_obs_tensor, object_tensor).detach().numpy().squeeze()
                 action = policy_runner.act_base(obs_tensor).detach().numpy().squeeze()
                 action = np.clip(action, -100, 100)
-                upper_action = action[:num_upper_actions]
-                lower_action = action[num_upper_actions:]
+                residual_action = np.clip(residual_action, -100, 100)
+                print(residual_action)
+                final_action = action + residual_action
+                upper_action = final_action[:num_upper_actions]
+                lower_action = final_action[num_upper_actions:]
 
                 target_lower_pos = lower_action * action_scale + lower_body_default_pos
                 target_upper_pos = upper_action * action_scale + upper_body_default_pos

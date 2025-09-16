@@ -96,9 +96,11 @@ try:
         gray_image = cv2.cvtColor(color_image, cv2.COLOR_BGR2GRAY)
 
         detections, images = detector.detect(gray_image, return_image=True)
+        print(detections)
         
     
         for detection in detections:
+            print(f"Tag ID: {detection.tag_id}")
             # Get tag corners
             corners = detection.corners.astype(int)
 
@@ -123,6 +125,13 @@ try:
             
             position = pose[:3, 3]
             rotation_matrix = pose[:3, :3]
+            transform = np.array([
+                [0,  0,  1],   
+                [-1, 0,  0],    
+                [0, -1,  0]   
+            ])
+            position = transform @ position
+            rotation_matrix = transform @ rotation_matrix @ transform.T
 
             
             r = Rotation.from_matrix(rotation_matrix)
