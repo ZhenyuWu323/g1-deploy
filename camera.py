@@ -96,11 +96,9 @@ try:
         gray_image = cv2.cvtColor(color_image, cv2.COLOR_BGR2GRAY)
 
         detections, images = detector.detect(gray_image, return_image=True)
-        print(detections)
         
     
         for detection in detections:
-            print(f"Tag ID: {detection.tag_id}")
             # Get tag corners
             corners = detection.corners.astype(int)
 

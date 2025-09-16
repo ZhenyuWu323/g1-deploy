@@ -19,6 +19,7 @@ from common.remote_controller import RemoteController, KeyMap
 from config import Config
 from policy.policy_runner import ResidualPolicyRunner
 from common.circular_buffer import CircularBuffer
+from apriltag_camera import AprilTagDetector
 
 
 class Controller:
@@ -27,13 +28,16 @@ class Controller:
         self.remote_controller = RemoteController()
 
         # Initialize the policy network
+        self.apriltag_detector = AprilTagDetector(coordinate_transform=False)
         self.policy_runner = ResidualPolicyRunner()
         # Initializing process variables
         #self.qj = np.zeros(config.num_actions, dtype=np.float32)
         #self.dqj = np.zeros(config.num_actions, dtype=np.float32)
         self.action = np.zeros(config.num_actions, dtype=np.float32)
+        self.residual_action = np.zeros(config.num_actions, dtype=np.float32)
         self.upper_body_target = config.upper_body_default_pos.copy()
         self.obs = np.zeros(config.num_obs, dtype=np.float32)
+        self.residual_obs = np.zeros(config.num_obs, dtype=np.float32)
         self.cmd = np.array([0.0, 0, 0])
         self.counter = 0
 
@@ -44,6 +48,7 @@ class Controller:
         self.ang_vel_buff = CircularBuffer(max_len=config.history_length, data_shape=(3,))
         self.projected_gravity_buff = CircularBuffer(max_len=config.history_length, data_shape=(3,))
         self.vel_command_buff = CircularBuffer(max_len=config.history_length, data_shape=(3,))
+        self.residual_action_buff = CircularBuffer(max_len=config.history_length, data_shape=(config.num_actions,))
 
         if config.msg_type == "hg":
             # g1 and h1_2 use the hg msg type
@@ -175,6 +180,7 @@ class Controller:
         self.projected_gravity_buff.append(gravity_orientation)
         self.vel_command_buff.append(cmd)
         self.action_buff.append(self.action.copy())
+        self.residual_action_buff.append(self.residual_action.copy())
 
     def default_pos_state(self):
         print("Enter default pos state.")
@@ -182,6 +188,7 @@ class Controller:
         while self.remote_controller.button[KeyMap.A] != 1:
             # update obs
             self.get_obs()
+            print(self.apriltag_detector.get_last_obs())
             # set upper body
             for i in range(len(self.config.upper_body_joint2motor_idx)):
                 motor_idx = self.config.upper_body_joint2motor_idx[i]
@@ -212,30 +219,40 @@ class Controller:
         projected_gravity = self.projected_gravity_buff.get_history(self.config.history_length).flatten()
         actions = self.action_buff.get_history(self.config.history_length).flatten()
         vel_command = self.vel_command_buff.get_history(self.config.history_length).flatten()
+        residual_actions = self.residual_action_buff.get_history(self.config.history_length).flatten()
+        object_obs = self.apriltag_detector.get_object_obs()
 
         self.cmd[0] = self.remote_controller.ly
         self.cmd[1] = self.remote_controller.lx * -1
         self.cmd[2] = self.remote_controller.rx * -1
 
-        self.obs = np.concatenate([
+        base_obs = np.concatenate([
             ang_vel,                        # 15 (5 * 3)
-            projected_gravity,              # 15 (5 * 3)  
-            #self.cmd * self.config.cmd_scale * self.config.max_cmd,                       # 3
-            #self.upper_body_target,  # 14
-            vel_command,
+            projected_gravity,              # 15 (5 * 3)
+            vel_command,                    # 3
             joint_pos,                      # 145 (5 * 29)
             joint_vel,                      # 145 (5 * 29)
-            actions                          # 145 (5 * 29)
         ])
+
+        self.obs = np.concatenate([base_obs, actions])
+        self.residual_obs = np.concatenate([base_obs, residual_actions])
+
         self.obs = np.clip(self.obs, -self.config.clip_obervation, self.config.clip_obervation)
-        print(f"Observation: {self.obs}")
+        #print(f"Observation: {self.obs}")
+        self.residual_obs = np.clip(self.residual_obs, -self.config.clip_obervation, self.config.clip_obervation)
+
         # Get the action from the policy network
         obs_tensor = torch.from_numpy(self.obs).float().unsqueeze(0)
+        residual_obs_tensor = torch.from_numpy(self.residual_obs).float().unsqueeze(0)
+        object_obs_tensor = torch.from_numpy(object_obs).float().unsqueeze(0)
         self.action = self.policy_runner.act_base(obs_tensor).detach().numpy().squeeze()
+        self.residual_action = self.policy_runner.act_residual(residual_obs_tensor, object_obs_tensor).detach().numpy().squeeze()
         self.action = np.clip(self.action, -self.config.clip_action, self.config.clip_action)
-        print(f"Action: {self.action}")
+        self.residual_action = np.clip(self.residual_action, -self.config.clip_action, self.config.clip_action)
+        #print(f"Action: {self.action}")
         
         # transform action to target_dof_pos
+        #final_action = self.action + self.residual_action
         upper_body_actions = self.action[:self.config.num_upper_actions]
         upper_body_target = self.config.upper_body_default_pos + upper_body_actions * self.config.action_scale
 
@@ -287,6 +304,10 @@ if __name__ == "__main__":
     # Enter the zero torque state, press the start key to continue executing
     controller.zero_torque_state()
 
+    # Intialize Camera
+    controller.apriltag_detector.start()
+    time.sleep(2)
+
     # Move to the default position
     controller.move_to_default_pos()
 
@@ -302,6 +323,7 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             break
     # Enter the damping state
+    controller.apriltag_detector.stop()
     create_damping_cmd(controller.low_cmd)
     controller.send_cmd(controller.low_cmd)
     print("Exit")

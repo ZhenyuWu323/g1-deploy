@@ -274,7 +274,7 @@ if __name__ == "__main__":
                 residual_obs_tensor = torch.from_numpy(residual_actor_obs).float().unsqueeze(0)
                 
                 object_pos = apriltag_detector.get_object_obs()
-                #print(object_pos)
+                print(object_pos)
                 object_tensor = torch.from_numpy(object_pos).float().unsqueeze(0)
 
                 # policy inference
@@ -282,7 +282,7 @@ if __name__ == "__main__":
                 action = policy_runner.act_base(obs_tensor).detach().numpy().squeeze()
                 action = np.clip(action, -100, 100)
                 residual_action = np.clip(residual_action, -100, 100)
-                print(residual_action)
+                #print(residual_action)
                 final_action = action + residual_action
                 upper_action = final_action[:num_upper_actions]
                 lower_action = final_action[num_upper_actions:]

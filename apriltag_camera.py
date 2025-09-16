@@ -75,9 +75,9 @@ class AprilTagDetector:
         
         
         self.transform_matrix = np.array([
-            [0,  0,  1],   # camera Z -> robot X (前)
-            [-1, 0,  0],   # camera -X -> robot Y (左)  
-            [0, -1,  0]    # camera -Y -> robot Z (上)
+            [0,  0,  1],   # camera Z -> robot X 
+            [-1, 0,  0],   # camera -X -> robot Y  
+            [0, -1,  0]    # camera -Y -> robot Z 
         ])
 
         # buffer
@@ -227,6 +227,13 @@ class AprilTagDetector:
         
         return obs.flatten()
     
+
+    def get_last_obs(self) -> np.ndarray:
+
+        with self.detection_lock:
+            obs = self.object_pose_buff.get_history(1)
+        return obs.flatten()
+    
     def is_running(self) -> bool:
         
         return self.running
@@ -259,10 +266,8 @@ if __name__ == "__main__":
             time.sleep(2)
             
             # Get observations
-            for i in range(100):
+            while True:
                 obs = detector.get_object_obs()
-                
-                print(f"Step {i}:")
                 print(f"  Obs shape: {obs.shape}")
                 print(f"  Obs: {obs}")
                 print("---")
