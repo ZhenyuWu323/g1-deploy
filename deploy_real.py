@@ -28,7 +28,7 @@ class Controller:
         self.remote_controller = RemoteController()
 
         # Initialize the policy network
-        self.apriltag_detector = AprilTagDetector(coordinate_transform=False)
+        self.apriltag_detector = AprilTagDetector()
         self.policy_runner = ResidualPolicyRunner()
         # Initializing process variables
         #self.qj = np.zeros(config.num_actions, dtype=np.float32)
@@ -252,11 +252,11 @@ class Controller:
         #print(f"Action: {self.action}")
         
         # transform action to target_dof_pos
-        #final_action = self.action + self.residual_action
-        upper_body_actions = self.action[:self.config.num_upper_actions]
+        final_action = self.action + self.residual_action
+        upper_body_actions = final_action[:self.config.num_upper_actions]
         upper_body_target = self.config.upper_body_default_pos + upper_body_actions * self.config.action_scale
 
-        lower_body_actions = self.action[self.config.num_upper_actions:]
+        lower_body_actions = final_action[self.config.num_upper_actions:]
         lower_body_target = self.config.lower_body_default_pos + lower_body_actions * self.config.action_scale
         
         # Build low cmd

@@ -163,6 +163,10 @@ if __name__ == "__main__":
     time.sleep(2)
 
     with mujoco.viewer.launch_passive(m, d) as viewer:
+        viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+        viewer.cam.trackbodyid = 0  
+        viewer.cam.distance = 1.5   
+        viewer.cam.elevation = -15  
         # Close the viewer automatically after simulation_duration wall-seconds.
         start = time.time()
         while viewer.is_running() and time.time() - start < simulation_duration:

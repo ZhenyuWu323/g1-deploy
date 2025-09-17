@@ -32,7 +32,7 @@ print(f"Camera intrinsics: fx={intrinsics.fx:.2f}, fy={intrinsics.fy:.2f}, cx={i
 # apriltag detector
 options = apriltag.DetectorOptions(families="tag25h9")
 detector = apriltag.Detector(options)
-tag_size = 52.12 / 1000
+tag_size = 71.12 / 1000
 
 
 
@@ -144,18 +144,22 @@ try:
             
             position = pose[:3, 3]
             rotation_matrix = pose[:3, :3]
-            transform = np.array([
-                [0,  0,  1],   
-                [-1, 0,  0],    
-                [0, -1,  0]   
-            ])
-            position = transform @ position
-            rotation_matrix = transform @ rotation_matrix #@ transform.T
-            tansformed_pose = np.eye(4)
-            tansformed_pose[:3, :3] = rotation_matrix
-            tansformed_pose[:3, 3] = position
-            # draw_tag_axes(color_image, tansformed_pose, camera_params, axis_len=tag_size*0.75, thickness=2)
 
+            # # rotate apriltag first
+            # object_transform = Rotation.from_euler('xy', [90,-90], degrees=True)
+            # rot_obj = object_transform.as_matrix()
+            # position = position @ rot_obj
+            # rotation_matrix = rotation_matrix @ rot_obj
+
+            # # rotate camera
+            # rot_camera = np.array([
+            #     [0,  0,  1],   
+            #     [-1, 0,  0],    
+            #     [0, -1,  0]   
+            # ])
+            # position = rot_camera @ position
+            # rotation_matrix = rot_camera @ rotation_matrix
+            
             
             r = Rotation.from_matrix(rotation_matrix)
             quat = Rotation.as_quat(r)
