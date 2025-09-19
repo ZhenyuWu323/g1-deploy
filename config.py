@@ -56,3 +56,8 @@ class Config:
             self.clip_action = config["clip_action"]
             self.clip_obervation = config["clip_observation"]
             self.history_length = config["history_length"]
+
+            self.vel_x_cmd = config["vel_x_cmd"]
+            self.vel_y_cmd = config['vel_y_cmd']
+            self.yaw_cmd = config['yaw_cmd']
+

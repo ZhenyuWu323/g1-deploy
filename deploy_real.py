@@ -23,13 +23,20 @@ from apriltag_camera import AprilTagDetector
 
 
 class Controller:
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, use_residual=True) -> None:
         self.config = config
         self.remote_controller = RemoteController()
 
         # Initialize the policy network
-        self.apriltag_detector = AprilTagDetector()
-        self.policy_runner = ResidualPolicyRunner()
+        self.policy_runner = ResidualPolicyRunner(use_residual=use_residual)
+
+        # Initialize camera
+        self.apriltag_detector = None
+        self.use_residual = use_residual
+        if use_residual:
+            self.apriltag_detector = AprilTagDetector()
+            self.apriltag_detector.start()
+            time.sleep(2)
         # Initializing process variables
         #self.qj = np.zeros(config.num_actions, dtype=np.float32)
         #self.dqj = np.zeros(config.num_actions, dtype=np.float32)
@@ -171,7 +178,7 @@ class Controller:
         gravity_orientation = get_gravity_orientation(quat)
 
         # command
-        cmd = self.cmd * self.config.cmd_scale * self.config.max_cmd
+        cmd = self.cmd 
 
         # add to history
         self.joint_pos_buff.append(q_t)
@@ -188,7 +195,7 @@ class Controller:
         while self.remote_controller.button[KeyMap.A] != 1:
             # update obs
             self.get_obs()
-            print(self.apriltag_detector.get_last_obs())
+            #print(self.apriltag_detector.get_last_obs())
             # set upper body
             for i in range(len(self.config.upper_body_joint2motor_idx)):
                 motor_idx = self.config.upper_body_joint2motor_idx[i]
@@ -209,6 +216,15 @@ class Controller:
             self.send_cmd(self.low_cmd)
             time.sleep(self.config.control_dt)
 
+    def to_cmd_fixed_value(self, analog_value, threshold, max_value, min_value):
+        
+        if abs(analog_value) <= threshold:
+            return 0.0
+        elif analog_value > 0:
+            return max_value     
+        else:
+            return min_value   
+
     def run(self):
         self.counter += 1
         # get obs
@@ -220,12 +236,12 @@ class Controller:
         actions = self.action_buff.get_history(self.config.history_length).flatten()
         vel_command = self.vel_command_buff.get_history(self.config.history_length).flatten()
         residual_actions = self.residual_action_buff.get_history(self.config.history_length).flatten()
-        object_obs = self.apriltag_detector.get_object_obs()
+        
+        self.cmd[0] = self.to_cmd_fixed_value(self.remote_controller.ly, 0.1, self.config.vel_x_cmd[1], self.config.vel_x_cmd[0])
+        self.cmd[1] = self.to_cmd_fixed_value(self.remote_controller.lx * -1, 0.1, self.config.vel_y_cmd[1], self.config.vel_y_cmd[0])
+        self.cmd[2] = self.to_cmd_fixed_value(self.remote_controller.rx * -1, 0.1, self.config.yaw_cmd[1], self.config.yaw_cmd[0])
 
-        self.cmd[0] = self.remote_controller.ly
-        self.cmd[1] = self.remote_controller.lx * -1
-        self.cmd[2] = self.remote_controller.rx * -1
-
+        # base proprio obs
         base_obs = np.concatenate([
             ang_vel,                        # 15 (5 * 3)
             projected_gravity,              # 15 (5 * 3)
@@ -234,22 +250,28 @@ class Controller:
             joint_vel,                      # 145 (5 * 29)
         ])
 
+        # joint policy obs
         self.obs = np.concatenate([base_obs, actions])
-        self.residual_obs = np.concatenate([base_obs, residual_actions])
-
         self.obs = np.clip(self.obs, -self.config.clip_obervation, self.config.clip_obervation)
-        #print(f"Observation: {self.obs}")
-        self.residual_obs = np.clip(self.residual_obs, -self.config.clip_obervation, self.config.clip_obervation)
 
-        # Get the action from the policy network
+        # joint policy action
         obs_tensor = torch.from_numpy(self.obs).float().unsqueeze(0)
-        residual_obs_tensor = torch.from_numpy(self.residual_obs).float().unsqueeze(0)
-        object_obs_tensor = torch.from_numpy(object_obs).float().unsqueeze(0)
         self.action = self.policy_runner.act_base(obs_tensor).detach().numpy().squeeze()
-        self.residual_action = self.policy_runner.act_residual(residual_obs_tensor, object_obs_tensor).detach().numpy().squeeze()
         self.action = np.clip(self.action, -self.config.clip_action, self.config.clip_action)
-        self.residual_action = np.clip(self.residual_action, -self.config.clip_action, self.config.clip_action)
-        #print(f"Action: {self.action}")
+        
+        
+        if self.use_residual:
+            # get camera obs
+            object_obs = self.apriltag_detector.get_object_obs()
+            object_obs_tensor = torch.from_numpy(object_obs).float().unsqueeze(0)
+
+            # get residual actor obs
+            self.residual_obs = np.concatenate([base_obs, residual_actions])
+            self.residual_obs = np.clip(self.residual_obs, -self.config.clip_obervation, self.config.clip_obervation)
+            residual_obs_tensor = torch.from_numpy(self.residual_obs).float().unsqueeze(0)
+            self.residual_action = self.policy_runner.act_residual(residual_obs_tensor, object_obs_tensor).detach().numpy().squeeze()
+            self.residual_action = np.clip(self.residual_action, -self.config.clip_action, self.config.clip_action)
+        
         
         # transform action to target_dof_pos
         final_action = self.action + self.residual_action
@@ -289,6 +311,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("net", type=str, help="network interface")
+    parser.add_argument("use_residual", type=bool, default=False, help='use residual network')
     #parser.add_argument("config", type=str, help="config file name in the configs folder", default="g1.yaml")
     args = parser.parse_args()
 
@@ -299,14 +322,11 @@ if __name__ == "__main__":
     # Initialize DDS communication
     ChannelFactoryInitialize(0, args.net)
 
-    controller = Controller(config)
+    controller = Controller(config, args.use_residual)
 
     # Enter the zero torque state, press the start key to continue executing
     controller.zero_torque_state()
 
-    # Intialize Camera
-    controller.apriltag_detector.start()
-    time.sleep(2)
 
     # Move to the default position
     controller.move_to_default_pos()
@@ -323,7 +343,8 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             break
     # Enter the damping state
-    controller.apriltag_detector.stop()
+    if args.use_residual:
+        controller.apriltag_detector.stop()
     create_damping_cmd(controller.low_cmd)
     controller.send_cmd(controller.low_cmd)
     print("Exit")

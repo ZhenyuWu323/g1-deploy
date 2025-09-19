@@ -129,25 +129,25 @@ class AprilTagDetector:
         
         # Apply coordinate transformation if enabled
         if self.coordinate_transform:
-            position[0] += 0.05 # 5 cm offset
+            # position[0] += 0.05 # 5 cm offset
 
 
             # position = self.transform_matrix @ position
             # rotation_matrix = self.transform_matrix @ rotation_matrix
 
-            # object_transform = Rotation.from_euler('xy', [90,-90], degrees=True)
+            # object_transform = Rotation.from_euler('x', -90, degrees=True)
             # rot_obj = object_transform.as_matrix()
             # #position = position @ position
-            # rotation_matrix = rot_obj @ rotation_matrix
+            # rotation_matrix = rotation_matrix @ rot_obj
 
-            #rotate camera
-            # rot_camera = np.array([
-            #     [0,  0,  1],   
-            #     [-1, 0,  0],    
-            #     [0, -1,  0]   
-            # ])
-            # position = rot_camera @ position
-            # rotation_matrix = rot_camera @ rotation_matrix
+            
+            rot_camera = np.array([
+                [0,  0,  1],   
+                [-1, 0,  0],    
+                [0, -1,  0]   
+            ])
+            position = rot_camera @ position
+            rotation_matrix = rot_camera @ rotation_matrix
             
         
         # Convert rotation matrix to quaternion (w, x, y, z)

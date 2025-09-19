@@ -9,15 +9,16 @@ import yaml
 
 class ResidualPolicyRunner():
 
-    def __init__(self):
+    def __init__(self, use_residual=True):
         # load configs and checkpoints
-        self.checkpoint = CHECKPOINT_PATH / 'model_400.pt'
+        self.checkpoint = CHECKPOINT_PATH / 'joint_deployed.pt'
         self.policy_cfg = CONFIG_PATH / 'policy.yaml'
         assert self.checkpoint.exists(), f"Checkpoint not found: {self.checkpoint}"
         assert self.policy_cfg.exists(), f"Config file not found: {self.policy_cfg}"
 
         self.body_keys = ['upper_body', 'lower_body', 'residual_whole_body']
         self.obs_keys = ['actor_obs', 'residual_actor_obs', 'encoder_obs']
+        self.use_residual = use_residual
 
         # step up policies
         self.__step_up_policy()
@@ -66,15 +67,19 @@ class ResidualPolicyRunner():
                 encoder_num_layers = residual_wbc_cfg['encoder_num_layers'],
                 activation = residual_wbc_cfg['activation']
             )
-            load_residual = self.residual_wbc_policy.load_state_dict(loaded_dict[f"model_state_dict_{residual_wbc_cfg['body_key']}"])
-            if load_residual:
-                print('[INFO]: Load Residual WBC Policy')
+
+            if self.use_residual:
+                load_residual = self.residual_wbc_policy.load_state_dict(loaded_dict[f"model_state_dict_{residual_wbc_cfg['body_key']}"])
+                if load_residual:
+                    print('[INFO]: Load Residual WBC Policy')
 
         self.lower_body_policy.eval()
         self.upper_body_policy.eval()
         self.residual_wbc_policy.eval()
 
-        #assert load_upper and load_lower and load_residual, 'Failed to load Checkpoint'
+        assert load_upper and load_lower, 'Failed to load Joint Checkpoint'
+
+        assert load_residual and self.use_residual, 'Failed to load Residual Checkpoint'
 
 
     def act_base(self, obs):

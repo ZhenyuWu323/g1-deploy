@@ -13,6 +13,8 @@ from config import CONFIG_PATH
 from apriltag_camera import AprilTagDetector
 from common.circular_buffer import CircularBuffer
 
+USE_RESIDUAL = False
+
 
 def get_gravity_orientation(quaternion):
     qw = quaternion[0]
@@ -157,10 +159,12 @@ if __name__ == "__main__":
     # load policy
     #policy = torch.jit.load(policy_path)
 
-    policy_runner = ResidualPolicyRunner()
-    apriltag_detector = AprilTagDetector()
-    apriltag_detector.start()
-    time.sleep(2)
+    policy_runner = ResidualPolicyRunner(use_residual=USE_RESIDUAL)
+    apriltag_detector = None
+    if USE_RESIDUAL:
+        apriltag_detector = AprilTagDetector()
+        apriltag_detector.start()
+        time.sleep(2)
 
     with mujoco.viewer.launch_passive(m, d) as viewer:
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
@@ -263,33 +267,33 @@ if __name__ == "__main__":
                 big_group_major = np.clip(big_group_major, -100, 100)
                 obs_tensor = torch.from_numpy(big_group_major).float().unsqueeze(0)
 
+                if USE_RESIDUAL:
+                    obs_residual_action = residual_action_buff.get_history(5).flatten()
+                    residual_actor_obs = np.concatenate([
+                        obs_omega,
+                        obs_gravity_orientation,
+                        obs_cmd,
+                        #upper_body_default_pos,
+                        obs_pos,
+                        obs_vel,
+                        obs_residual_action
+                    ])
+                    residual_actor_obs = np.clip(residual_actor_obs, -100, 100)
+                    residual_obs_tensor = torch.from_numpy(residual_actor_obs).float().unsqueeze(0)
+                    
+                    object_pos = apriltag_detector.get_object_obs()
+                    object_tensor = torch.from_numpy(object_pos).float().unsqueeze(0)
+                    # residual action
+                    residual_action = policy_runner.act_residual(residual_obs_tensor, object_tensor).detach().numpy().squeeze()
+                    residual_action = np.clip(residual_action, -100, 100)
 
-                obs_residual_action = residual_action_buff.get_history(5).flatten()
-                residual_actor_obs = np.concatenate([
-                    obs_omega,
-                    obs_gravity_orientation,
-                    obs_cmd,
-                    #upper_body_default_pos,
-                    obs_pos,
-                    obs_vel,
-                    obs_residual_action
-                ])
-                residual_actor_obs = np.clip(residual_actor_obs, -100, 100)
-                residual_obs_tensor = torch.from_numpy(residual_actor_obs).float().unsqueeze(0)
-                
-                object_pos = apriltag_detector.get_object_obs()
-                print(object_pos)
-                object_tensor = torch.from_numpy(object_pos).float().unsqueeze(0)
-
-                # policy inference
-                residual_action = policy_runner.act_residual(residual_obs_tensor, object_tensor).detach().numpy().squeeze()
+                # base action
                 action = policy_runner.act_base(obs_tensor).detach().numpy().squeeze()
                 action = np.clip(action, -100, 100)
-                residual_action = np.clip(residual_action, -100, 100)
                 #print(residual_action)
                 final_action = action + residual_action
-                upper_action = final_action[:num_upper_actions]
-                lower_action = final_action[num_upper_actions:]
+                upper_action = action[:num_upper_actions]
+                lower_action = action[num_upper_actions:]
 
                 target_lower_pos = lower_action * action_scale + lower_body_default_pos
                 target_upper_pos = upper_action * action_scale + upper_body_default_pos
