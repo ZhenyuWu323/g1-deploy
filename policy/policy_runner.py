@@ -67,7 +67,7 @@ class ResidualPolicyRunner():
                 encoder_num_layers = residual_wbc_cfg['encoder_num_layers'],
                 activation = residual_wbc_cfg['activation']
             )
-
+            load_residual = False
             if self.use_residual:
                 load_residual = self.residual_wbc_policy.load_state_dict(loaded_dict[f"model_state_dict_{residual_wbc_cfg['body_key']}"])
                 if load_residual:
@@ -79,7 +79,8 @@ class ResidualPolicyRunner():
 
         assert load_upper and load_lower, 'Failed to load Joint Checkpoint'
 
-        assert load_residual and self.use_residual, 'Failed to load Residual Checkpoint'
+        if self.use_residual:
+            assert load_residual, 'Failed to load Residual Checkpoint'
 
 
     def act_base(self, obs):
