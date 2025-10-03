@@ -55,10 +55,8 @@ if __name__ == "__main__":
         upper_body_joint2motor_idx = [15, 22, 16, 23, 17, 24, 18, 25, 19, 26, 20, 27, 21, 28]
         upper_body_kps=[40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40]
         upper_body_kds=[10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
-        #upper_body_default_pos=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] #TODO: print check
+        upper_body_default_pos=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
         
-        upper_body_default_pos=[ 0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,
-         -1.5700,  1.5700,  0.0000,  0.0000,  0.0000,  0.0000] #TODO: print check
 
         # idx: sim order, value: real motor id
         lower_body_joint2motor_idx=[12, 13, 14, 0, 6, 1, 7, 2, 8, 3, 9, 4, 10, 5, 11]
@@ -74,7 +72,7 @@ if __name__ == "__main__":
         num_upper_actions=14
         num_lower_actions=15
 
-        default_angles = np.array(config["default_angles"], dtype=np.float32)
+        default_angles = np.array(whole_body_default_pos, dtype=np.float32)
 
         ang_vel_scale = config["ang_vel_scale"]
         dof_pos_scale = config["dof_pos_scale"]
@@ -91,7 +89,14 @@ if __name__ == "__main__":
     action = np.zeros(num_actions, dtype=np.float32)
     residual_action = np.zeros(num_actions, dtype=np.float32)
     obs = np.zeros(num_obs, dtype=np.float32)
+
     residual_action_buff = CircularBuffer(max_len=5, data_shape=(num_actions,))
+    joint_pos_buff = CircularBuffer(max_len=5, data_shape=(num_actions,))
+    joint_vel_buff = CircularBuffer(max_len=5, data_shape=(num_actions,))
+    vel_command_buff = CircularBuffer(max_len=5, data_shape=(3,))
+    gravity_orientation_buff = CircularBuffer(max_len=5, data_shape=(3,))
+    angular_velocity_buff = CircularBuffer(max_len=5, data_shape=(3,))
+    action_buff = CircularBuffer(max_len=5, data_shape=(num_actions,))
 
     counter = 0
 
@@ -152,6 +157,13 @@ if __name__ == "__main__":
     frame_stack = deque(maxlen=5)
     for _ in range(5):
         residual_action_buff.append(residual_action.copy())
+        action_buff.append(action.copy())
+        joint_pos_buff.append(np.zeros(num_actions, dtype=np.float32))
+        joint_vel_buff.append(np.zeros(num_actions, dtype=np.float32))
+        vel_command_buff.append(np.zeros(3, dtype=np.float32))
+        gravity_orientation_buff.append(np.zeros(3, dtype=np.float32))
+        angular_velocity_buff.append(np.zeros(3, dtype=np.float32))
+
         frame_stack.append(obs.copy())
         mujoco.mj_step(m, d) 
 
@@ -237,29 +249,43 @@ if __name__ == "__main__":
 
                 count = counter * simulation_dt
 
-                obs[:3] = omega
-                obs[3:6] = gravity_orientation
-                obs[6:9] = cmd * cmd_scale
-                obs[9 : 9 + num_actions] = qj[xml_to_policy]
-                obs[9 + num_actions : 9 + 2 * num_actions] = dqj[xml_to_policy]
-                obs[9 + 2 * num_actions : 9 + 3 * num_actions] = action
+                # obs[:3] = omega
+                # obs[3:6] = gravity_orientation
+                # obs[6:9] = cmd * cmd_scale
+                # obs[9 : 9 + num_actions] = qj[xml_to_policy]
+                # obs[9 + num_actions : 9 + 2 * num_actions] = dqj[xml_to_policy]
+                # obs[9 + 2 * num_actions : 9 + 3 * num_actions] = action
 
-                frame_stack.append(obs.copy())
-                stacked_obs = np.concatenate(frame_stack, axis=0)
-                residual_action_buff.append(residual_action)
+                # frame_stack.append(obs.copy())
+                # stacked_obs = np.concatenate(frame_stack, axis=0)
+                # residual_action_buff.append(residual_action)
                 
                 
-                obs_omega = np.asarray(stacked_obs).reshape(5, 96)[:, 0:3].reshape(-1)
-                obs_gravity_orientation = np.asarray(stacked_obs).reshape(5, 96)[:, 3:6].reshape(-1)
-                obs_cmd = np.asarray(stacked_obs).reshape(5, 96)[:, 6:9].reshape(-1)
-                obs_pos = np.asarray(stacked_obs).reshape(5, 96)[:, 9:9 + num_actions].reshape(-1)
-                obs_vel = np.asarray(stacked_obs).reshape(5, 96)[:, 9 + num_actions : 9 + 2 * num_actions].reshape(-1)
-                obs_action = np.asarray(stacked_obs).reshape(5, 96)[:, 9 + 2 * num_actions : 9 + 3 * num_actions].reshape(-1)
+                # obs_omega = np.asarray(stacked_obs).reshape(5, 96)[:, 0:3].reshape(-1)
+                # obs_gravity_orientation = np.asarray(stacked_obs).reshape(5, 96)[:, 3:6].reshape(-1)
+                # obs_cmd = np.asarray(stacked_obs).reshape(5, 96)[:, 6:9].reshape(-1)
+                # obs_pos = np.asarray(stacked_obs).reshape(5, 96)[:, 9:9 + num_actions].reshape(-1)
+                # obs_vel = np.asarray(stacked_obs).reshape(5, 96)[:, 9 + num_actions : 9 + 2 * num_actions].reshape(-1)
+                # obs_action = np.asarray(stacked_obs).reshape(5, 96)[:, 9 + 2 * num_actions : 9 + 3 * num_actions].reshape(-1)
+                action_buff.append(action.copy())
+                joint_pos_buff.append(qj[xml_to_policy].copy())
+                joint_vel_buff.append(dqj[xml_to_policy].copy())
+                vel_command_buff.append(cmd.copy() * cmd_scale)
+                gravity_orientation_buff.append(gravity_orientation.copy())
+                angular_velocity_buff.append(omega.copy())
+
+                obs_omega = angular_velocity_buff.get_history(5).flatten()
+                obs_gravity_orientation = gravity_orientation_buff.get_history(5).flatten()
+                obs_cmd = vel_command_buff.get_history(5).flatten()
+                obs_pos = joint_pos_buff.get_history(5).flatten()
+                obs_vel = joint_vel_buff.get_history(5).flatten()
+                obs_action = action_buff.get_history(5).flatten()
+                
                 big_group_major = np.concatenate([
                     obs_omega,
                     obs_gravity_orientation,
-                    obs_cmd,
-                    #upper_body_default_pos,
+                    cmd * cmd_scale,
+                    np.array([0, -0.1, 0], dtype=np.float32),
                     obs_pos,
                     obs_vel,
                     obs_action,
