@@ -20,7 +20,7 @@ from config import Config
 from policy.policy_runner import ResidualPolicyRunner
 from common.circular_buffer import CircularBuffer
 from apriltag_camera import AprilTagDetector
-
+USE_RESIDUAL=False
 
 class Controller:
     def __init__(self, config: Config, use_residual=True) -> None:
@@ -54,7 +54,7 @@ class Controller:
         self.action_buff = CircularBuffer(max_len=config.history_length, data_shape=(config.num_actions,))
         self.ang_vel_buff = CircularBuffer(max_len=config.history_length, data_shape=(3,))
         self.projected_gravity_buff = CircularBuffer(max_len=config.history_length, data_shape=(3,))
-        self.vel_command_buff = CircularBuffer(max_len=config.history_length, data_shape=(3,))
+        #self.vel_command_buff = CircularBuffer(max_len=config.history_length, data_shape=(3,))
         self.residual_action_buff = CircularBuffer(max_len=config.history_length, data_shape=(config.num_actions,))
 
         if config.msg_type == "hg":
@@ -185,7 +185,7 @@ class Controller:
         self.joint_vel_buff.append(dq_t)
         self.ang_vel_buff.append(ang_vel)
         self.projected_gravity_buff.append(gravity_orientation)
-        self.vel_command_buff.append(cmd)
+        #self.vel_command_buff.append(cmd)
         self.action_buff.append(self.action.copy())
         self.residual_action_buff.append(self.residual_action.copy())
 
@@ -234,7 +234,7 @@ class Controller:
         ang_vel = self.ang_vel_buff.get_history(self.config.history_length).flatten()
         projected_gravity = self.projected_gravity_buff.get_history(self.config.history_length).flatten()
         actions = self.action_buff.get_history(self.config.history_length).flatten()
-        vel_command = self.vel_command_buff.get_history(self.config.history_length).flatten()
+        #vel_command = self.vel_command_buff.get_history(self.config.history_length).flatten()
         residual_actions = self.residual_action_buff.get_history(self.config.history_length).flatten()
         
         self.cmd[0] = self.to_cmd_fixed_value(self.remote_controller.ly, 0.1, self.config.vel_x_cmd[1], self.config.vel_x_cmd[0])
@@ -245,7 +245,8 @@ class Controller:
         base_obs = np.concatenate([
             ang_vel,                        # 15 (5 * 3)
             projected_gravity,              # 15 (5 * 3)
-            vel_command,                    # 3
+            self.cmd,
+            np.array([0, 0.0, 0], dtype=np.float32),                    # 3
             joint_pos,                      # 145 (5 * 29)
             joint_vel,                      # 145 (5 * 29)
         ])
@@ -311,7 +312,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("net", type=str, help="network interface")
-    parser.add_argument("use_residual", type=bool, default=False, help='use residual network')
+    #parser.add_argument("use_residual", type=bool, default=False, help='use residual network')
     #parser.add_argument("config", type=str, help="config file name in the configs folder", default="g1.yaml")
     args = parser.parse_args()
 
@@ -322,7 +323,7 @@ if __name__ == "__main__":
     # Initialize DDS communication
     ChannelFactoryInitialize(0, args.net)
 
-    controller = Controller(config, args.use_residual)
+    controller = Controller(config, USE_RESIDUAL)
 
     # Enter the zero torque state, press the start key to continue executing
     controller.zero_torque_state()
