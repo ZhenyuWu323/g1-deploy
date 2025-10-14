@@ -20,7 +20,7 @@ from config import Config
 from policy.policy_runner import ResidualPolicyRunner
 from common.circular_buffer import CircularBuffer
 from apriltag_camera import AprilTagDetector
-
+USE_RESIDUAL=False
 
 class Controller:
     def __init__(self, config: Config, use_residual=True) -> None:
@@ -311,7 +311,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("net", type=str, help="network interface")
-    parser.add_argument("use_residual", type=bool, default=False, help='use residual network')
+    #parser.add_argument("use_residual", type=bool, default=False, help='use residual network')
     #parser.add_argument("config", type=str, help="config file name in the configs folder", default="g1.yaml")
     args = parser.parse_args()
 
@@ -322,7 +322,7 @@ if __name__ == "__main__":
     # Initialize DDS communication
     ChannelFactoryInitialize(0, args.net)
 
-    controller = Controller(config, args.use_residual)
+    controller = Controller(config, USE_RESIDUAL)
 
     # Enter the zero torque state, press the start key to continue executing
     controller.zero_torque_state()
