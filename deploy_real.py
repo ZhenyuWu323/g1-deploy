@@ -20,7 +20,7 @@ from config import Config
 from policy.policy_runner import ResidualPolicyRunner
 from common.circular_buffer import CircularBuffer
 from apriltag_camera import AprilTagDetector
-USE_RESIDUAL=False
+USE_RESIDUAL=True
 
 class Controller:
     def __init__(self, config: Config, use_residual=True) -> None:

@@ -80,7 +80,6 @@ class ResidualAdaptiveModule(nn.Module):
 
     def act_inference(self, observations, encoder_obs):
         with torch.no_grad():
-            encoder_obs = encoder_obs.view(encoder_obs.shape[0], self.num_time_steps, self.num_encoder_obs)
             encoded_obs = self.encoder(encoder_obs)
             actor_input = torch.cat([observations, encoded_obs], dim=-1)
             actions_mean = self.actor(actor_input)

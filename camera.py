@@ -123,7 +123,8 @@ try:
             pose, e0, e1 = detector.detection_pose(
                 detection=detection,
                 camera_params=camera_params,
-                tag_size=tag_size
+                tag_size=tag_size,
+                z_sign=-1
             )
 
             draw_pose(

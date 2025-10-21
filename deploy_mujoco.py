@@ -13,7 +13,7 @@ from config import CONFIG_PATH
 from apriltag_camera import AprilTagDetector
 from common.circular_buffer import CircularBuffer
 
-USE_RESIDUAL = False
+USE_RESIDUAL = True
 
 
 def get_gravity_orientation(quaternion):
@@ -320,8 +320,8 @@ if __name__ == "__main__":
                 action = np.clip(action, -100, 100)
                 #print(residual_action)
                 final_action = action + residual_action
-                upper_action = action[:num_upper_actions]
-                lower_action = action[num_upper_actions:]
+                upper_action = final_action[:num_upper_actions]
+                lower_action = final_action[num_upper_actions:]
 
                 target_lower_pos = lower_action * action_scale + lower_body_default_pos
                 target_upper_pos = upper_action * action_scale + upper_body_default_pos

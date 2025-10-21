@@ -84,6 +84,8 @@ class AprilTagDetector:
         self.history_length = history_length
         self.object_pose_buff = CircularBuffer(max_len=history_length, data_shape=(7,))
         self.default_pose = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+        self.current_pos = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+        self.prev_pos = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
     
     def _initialize_camera(self):
         """Initialize RealSense"""
@@ -124,8 +126,7 @@ class AprilTagDetector:
             tag_size=self.tag_size
         )
         
-        position = pose[:3, 3]
-        rotation_matrix = pose[:3, :3]
+        
         
         # Apply coordinate transformation if enabled
         if self.coordinate_transform:
@@ -140,16 +141,23 @@ class AprilTagDetector:
             # #position = position @ position
             # rotation_matrix = rotation_matrix @ rot_obj
 
-            
-            rot_camera = np.array([
+            transform = np.eye(4,4)
+            transform[:3, :3] = np.array([
                 [0,  0,  1],   
-                [-1, 0,  0],    
-                [0, -1,  0]   
+                [-1,  0,  0],   
+                [0, -1,  0]    
             ])
-            position = rot_camera @ position
-            rotation_matrix = rot_camera @ rotation_matrix
+            flip = np.eye(4,4)
+            flip[:3, :3] = np.array([
+                [1, 0, 0],
+                [0, -1, 0],
+                [0, 0, -1]
+            ])
+            pose = transform @ pose @ flip
+
             
-        
+        position = pose[:3, 3]
+        rotation_matrix = pose[:3, :3]
         # Convert rotation matrix to quaternion (w, x, y, z)
         r = Rotation.from_matrix(rotation_matrix)
         quat_xyzw = r.as_quat()  # [x, y, z, w]
@@ -188,6 +196,7 @@ class AprilTagDetector:
                             
                             # Add to buffer (thread-safe)
                             with self.detection_lock:
+                                self.prev_pos = pose_7d.copy()
                                 self.object_pose_buff.append(pose_7d)
                             
                             target_detected = True
@@ -200,7 +209,8 @@ class AprilTagDetector:
                 # If target tag not detected, add default pose (zeros + identity quaternion)
                 if not target_detected:
                     with self.detection_lock:
-                        self.object_pose_buff.append(self.default_pose)
+                        #self.object_pose_buff.append(self.default_pose)
+                        self.object_pose_buff.append(self.prev_pos)
                        
             except Exception as e:
                 print(f"Error in detection loop: {e}")
@@ -243,14 +253,14 @@ class AprilTagDetector:
         with self.detection_lock:
             obs = self.object_pose_buff.get_history(self.history_length)
         
-        return obs.flatten()
+        return obs
     
 
     def get_last_obs(self) -> np.ndarray:
 
         with self.detection_lock:
             obs = self.object_pose_buff.get_history(1)
-        return obs.flatten()
+        return obs
     
     def is_running(self) -> bool:
         
