@@ -148,9 +148,14 @@ class AprilTagDetector:
                 [0, -1,  0]    
             ])
             flip = np.eye(4,4)
+            # flip[:3, :3] = np.array([
+            #     [1, 0, 0],
+            #     [0, -1, 0],
+            #     [0, 0, -1]
+            # ])
             flip[:3, :3] = np.array([
-                [1, 0, 0],
                 [0, -1, 0],
+                [-1, 0, 0],
                 [0, 0, -1]
             ])
             pose = transform @ pose @ flip
