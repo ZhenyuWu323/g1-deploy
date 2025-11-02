@@ -1,7 +1,13 @@
+import os
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+
 from typing import Union
 import numpy as np
 import time
 import torch
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
 
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelFactoryInitialize
 from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelFactoryInitialize
@@ -20,7 +26,7 @@ from config import Config
 from policy.policy_runner import ResidualPolicyRunner
 from common.circular_buffer import CircularBuffer
 from apriltag_camera import AprilTagDetector
-USE_RESIDUAL=True
+USE_RESIDUAL=False
 
 class Controller:
     def __init__(self, config: Config, use_residual=True) -> None:
@@ -226,6 +232,7 @@ class Controller:
             return min_value   
 
     def run(self):
+        start_time = time.time()
         self.counter += 1
         # get obs
         self.get_obs()
@@ -276,10 +283,10 @@ class Controller:
         # transform action to target_dof_pos
         final_action = self.action + self.residual_action
         upper_body_actions = final_action[:self.config.num_upper_actions]
-        upper_body_target = self.config.upper_body_default_pos + upper_body_actions * self.config.action_scale
+        upper_body_target = self.config.upper_body_default_pos + upper_body_actions * self.config.upper_body_action_scale
 
         lower_body_actions = final_action[self.config.num_upper_actions:]
-        lower_body_target = self.config.lower_body_default_pos + lower_body_actions * self.config.action_scale
+        lower_body_target = self.config.lower_body_default_pos + lower_body_actions * self.config.lower_body_action_scale
         
         # Build low cmd
 
@@ -302,8 +309,13 @@ class Controller:
 
         # send the command
         self.send_cmd(self.low_cmd)
+        control_duration = time.time() - start_time
+        time_til_next_step = self.config.control_dt - control_duration
+        if time_til_next_step < 0:
+            print('f[WARNING] control over time')
+        else:
+            time.sleep(time_til_next_step)
 
-        time.sleep(self.config.control_dt)
 
 
 if __name__ == "__main__":

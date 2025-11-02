@@ -31,6 +31,10 @@ class Config:
             self.upper_body_kds = config["upper_body_kds"]
             self.upper_body_default_pos = np.array(config["upper_body_default_pos"], dtype=np.float32)
             self.num_upper_actions = config["num_upper_actions"]
+            self.upper_body_action_scale = config['upper_body_action_scale']
+            if isinstance(self.upper_body_action_scale, list):
+                self.upper_body_action_scale = np.array(self.upper_body_action_scale, dtype=np.float32)
+
 
             # Lower Body
             self.lower_body_joint2motor_idx = config["lower_body_joint2motor_idx"]
@@ -38,6 +42,11 @@ class Config:
             self.lower_body_kds = config["lower_body_kds"]
             self.lower_body_default_pos = np.array(config["lower_body_default_pos"], dtype=np.float32)
             self.num_lower_actions = config["num_lower_actions"]
+            self.lower_body_action_scale = config['lower_body_action_scale']
+            if isinstance(self.lower_body_action_scale, list):
+                self.lower_body_action_scale = np.array(self.lower_body_action_scale, dtype=np.float32)
+
+
 
             # Whole Body
             self.whole_body_joint2motor_idx = config["whole_body_joint2motor_idx"]
@@ -47,7 +56,7 @@ class Config:
             self.ang_vel_scale = config["ang_vel_scale"]
             self.dof_pos_scale = config["dof_pos_scale"]
             self.dof_vel_scale = config["dof_vel_scale"]
-            self.action_scale = config["action_scale"]
+            
             self.cmd_scale = np.array(config["cmd_scale"], dtype=np.float32)
             self.max_cmd = np.array(config["max_cmd"], dtype=np.float32)
 
