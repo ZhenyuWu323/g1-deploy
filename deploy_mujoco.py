@@ -1,3 +1,7 @@
+import os
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+
 import time
 import argparse
 import os
@@ -5,6 +9,8 @@ import mujoco.viewer
 import mujoco
 import numpy as np
 import torch
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
 import yaml
 from collections import deque
 from common.rotation_helper import transform_imu_data_pelvis_to_torso
@@ -13,7 +19,7 @@ from config import CONFIG_PATH
 from apriltag_camera import AprilTagDetector
 from common.circular_buffer import CircularBuffer
 
-USE_RESIDUAL = True
+USE_RESIDUAL = False
 
 
 def get_gravity_orientation(quaternion):
@@ -46,31 +52,27 @@ if __name__ == "__main__":
         simulation_dt = config["simulation_dt"]
         control_decimation = config["control_decimation"]
 
-        kps = np.array(config["kps"], dtype=np.float32)
-        kds = np.array(config["kds"], dtype=np.float32)
         policy_joints = config["policy_joints"]
         policy_lower_body_joints = config["policy_lower_body_joints"]
         policy_upper_body_joints = config["policy_upper_body_joints"]
         # idx: sim order, value: real motor id
-        upper_body_joint2motor_idx = [15, 22, 16, 23, 17, 24, 18, 25, 19, 26, 20, 27, 21, 28]
-        upper_body_kps=[40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40]
-        upper_body_kds=[10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
-        upper_body_default_pos=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] #TODO: print check
+        upper_body_joint2motor_idx = config["upper_body_joint2motor_idx"]
+        upper_body_kps = np.array(config["upper_body_kps"], dtype=np.float32)
+        upper_body_kds = np.array(config["upper_body_kds"], dtype=np.float32)
+        upper_body_default_pos = np.array(config["upper_body_default_pos"], dtype=np.float32)
         
         # upper_body_default_pos=[ 0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,
         #  -1.5700,  1.5700,  0.0000,  0.0000,  0.0000,  0.0000] #TODO: print check
 
         # idx: sim order, value: real motor id
-        lower_body_joint2motor_idx=[12, 13, 14, 0, 6, 1, 7, 2, 8, 3, 9, 4, 10, 5, 11]
-        lower_body_kps= [200, 40, 40, 100, 100, 100, 100, 100, 100, 150, 150, 40, 40, 40, 40]
-        lower_body_kds= [5, 5, 5, 2, 2, 2, 2, 2, 2, 4, 4, 2, 2, 2, 2]
-        lower_body_default_pos=[0, 0, 0, -0.1, -0.1, 0, 0, 0, 0, 0.3, 0.3, -0.2, -0.2, 0, 0] #TODO: print check
+        lower_body_joint2motor_idx = config["lower_body_joint2motor_idx"]
+        lower_body_kps = np.array(config["lower_body_kps"], dtype=np.float32)
+        lower_body_kds = np.array(config["lower_body_kds"], dtype=np.float32)
+        lower_body_default_pos = np.array(config["lower_body_default_pos"], dtype=np.float32)
 
         # idx: sim order, value: real motor id
-        whole_body_joint2motor_idx=[0, 6, 12, 1, 7, 13, 2, 8, 14, 3, 9, 15, 22, 4, 10, 16, 23, 5, 11, 17, 24, 18, 25, 19, 26, 20, 27, 21, 28]
-        whole_body_default_pos=[-0.1, -0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.3, 0.3, 0.0,
-        0.0, -0.2, -0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        0.0, 0.0, 0.0] # order: sim order
+        whole_body_joint2motor_idx = config["whole_body_joint2motor_idx"]
+        whole_body_default_pos = config["whole_body_default_pos"]
         num_upper_actions=14
         num_lower_actions=15
 
@@ -79,7 +81,12 @@ if __name__ == "__main__":
         ang_vel_scale = config["ang_vel_scale"]
         dof_pos_scale = config["dof_pos_scale"]
         dof_vel_scale = config["dof_vel_scale"]
-        action_scale = config["action_scale"]
+        upper_body_action_scale = config["upper_body_action_scale"]
+        lower_body_action_scale = config["lower_body_action_scale"]
+        if isinstance(upper_body_action_scale, list):
+            upper_body_action_scale = np.array(upper_body_action_scale, dtype=np.float32)
+        if isinstance(lower_body_action_scale, list):
+            lower_body_action_scale = np.array(lower_body_action_scale, dtype=np.float32)
         cmd_scale = np.array(config["cmd_scale"], dtype=np.float32)
 
         num_actions = config["num_actions"]
@@ -323,8 +330,8 @@ if __name__ == "__main__":
                 upper_action = final_action[:num_upper_actions]
                 lower_action = final_action[num_upper_actions:]
 
-                target_lower_pos = lower_action * action_scale + lower_body_default_pos
-                target_upper_pos = upper_action * action_scale + upper_body_default_pos
+                target_lower_pos = lower_action * lower_body_action_scale + lower_body_default_pos
+                target_upper_pos = upper_action * upper_body_action_scale + upper_body_default_pos
                 #action = policy(obs_tensor).detach().numpy().squeeze()
                 #action = action[policy_to_xml]
                 # transform action to target_dof_pos
