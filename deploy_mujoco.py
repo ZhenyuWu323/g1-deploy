@@ -19,7 +19,9 @@ from config import CONFIG_PATH
 from apriltag_camera import AprilTagDetector
 from common.circular_buffer import CircularBuffer
 
-USE_RESIDUAL = False
+USE_RESIDUAL = True
+ENCODER_HISTORY_STEP = 32
+POSE_TYPE = '6d'
 
 
 def get_gravity_orientation(quaternion):
@@ -183,7 +185,10 @@ if __name__ == "__main__":
     policy_runner = ResidualPolicyRunner(use_residual=USE_RESIDUAL)
     apriltag_detector = None
     if USE_RESIDUAL:
-        apriltag_detector = AprilTagDetector()
+        apriltag_detector = AprilTagDetector(
+            history_length=ENCODER_HISTORY_STEP,
+            pose_type=POSE_TYPE
+        )
         apriltag_detector.start()
         time.sleep(2)
 
@@ -277,6 +282,7 @@ if __name__ == "__main__":
                 # obs_vel = np.asarray(stacked_obs).reshape(5, 96)[:, 9 + num_actions : 9 + 2 * num_actions].reshape(-1)
                 # obs_action = np.asarray(stacked_obs).reshape(5, 96)[:, 9 + 2 * num_actions : 9 + 3 * num_actions].reshape(-1)
                 action_buff.append(action.copy())
+                residual_action_buff.append(residual_action.copy())
                 joint_pos_buff.append(qj[xml_to_policy].copy())
                 joint_vel_buff.append(dqj[xml_to_policy].copy())
                 vel_command_buff.append(cmd.copy() * cmd_scale)
@@ -317,6 +323,7 @@ if __name__ == "__main__":
                     residual_obs_tensor = torch.from_numpy(residual_actor_obs).float().unsqueeze(0)
                     
                     object_pos = apriltag_detector.get_object_obs()
+                    object_pos = np.clip(object_pos, -100, 100)
                     object_tensor = torch.from_numpy(object_pos).float().unsqueeze(0)
                     # residual action
                     residual_action = policy_runner.act_residual(residual_obs_tensor, object_tensor).detach().numpy().squeeze()

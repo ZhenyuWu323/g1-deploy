@@ -35,7 +35,8 @@ class AprilTagDetector:
                  resolution: Tuple[int, int] = (640, 480),
                  fps: int = 30,
                  coordinate_transform: bool = True,
-                 history_length: int = 5
+                 history_length: int = 5,
+                 pose_type: str = 'quat'
                  ):
         """
         Args:
@@ -73,19 +74,37 @@ class AprilTagDetector:
         self.last_fps_time = time.time()
         self.current_fps = 0
         
-        
-        self.transform_matrix = np.array([
-            [0,  0,  1],   # camera Z -> robot X 
-            [-1, 0,  0],   # camera -X -> robot Y  
-            [0, -1,  0]    # camera -Y -> robot Z 
-        ])
 
         # buffer
         self.history_length = history_length
-        self.object_pose_buff = CircularBuffer(max_len=history_length, data_shape=(7,))
-        self.default_pose = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
-        self.current_pos = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
-        self.prev_pos = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+        self.pose_type = pose_type
+        data_shape = 7
+        if self.pose_type == '6d':
+            data_shape = 3 + 6
+        elif self.pose_type == 'euler_xyz':
+            data_shape = 3 + 3
+        else:
+            data_shape = 7
+
+        self.object_pose_buff = CircularBuffer(max_len=history_length, data_shape=(data_shape,))
+        self.default_pose = np.zeros(data_shape)
+        self.current_pos = np.zeros(data_shape)
+        self.prev_pos = np.zeros(data_shape)
+
+        # transform
+        self.transform = np.eye(4,4)
+        self.transform[:3, :3] = np.array([
+                [0,  0,  1],   
+                [-1,  0,  0],   
+                [0, -1,  0]    
+            ])
+
+        self.flip = np.eye(4,4)
+        self.flip[:3, :3] = np.array([
+            [0, -1, 0],
+            [-1, 0, 0],
+            [0, 0, -1]
+        ])
     
     def _initialize_camera(self):
         """Initialize RealSense"""
@@ -130,46 +149,27 @@ class AprilTagDetector:
         
         # Apply coordinate transformation if enabled
         if self.coordinate_transform:
-            # position[0] += 0.05 # 5 cm offset
-
-
-            # position = self.transform_matrix @ position
-            # rotation_matrix = self.transform_matrix @ rotation_matrix
-
-            # object_transform = Rotation.from_euler('x', -90, degrees=True)
-            # rot_obj = object_transform.as_matrix()
-            # #position = position @ position
-            # rotation_matrix = rotation_matrix @ rot_obj
-
-            transform = np.eye(4,4)
-            transform[:3, :3] = np.array([
-                [0,  0,  1],   
-                [-1,  0,  0],   
-                [0, -1,  0]    
-            ])
-            flip = np.eye(4,4)
-            # flip[:3, :3] = np.array([
-            #     [1, 0, 0],
-            #     [0, -1, 0],
-            #     [0, 0, -1]
-            # ])
-            flip[:3, :3] = np.array([
-                [0, -1, 0],
-                [-1, 0, 0],
-                [0, 0, -1]
-            ])
-            pose = transform @ pose @ flip
+            pose = self.transform @ pose @ self.flip
 
             
         position = pose[:3, 3]
         rotation_matrix = pose[:3, :3]
         # Convert rotation matrix to quaternion (w, x, y, z)
         r = Rotation.from_matrix(rotation_matrix)
-        quat_xyzw = r.as_quat()  # [x, y, z, w]
-        quat_wxyz = np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])  # [w, x, y, z]
-        
+        orientation = None
+        if self.pose_type == 'quat':
+            quat_xyzw = r.as_quat()  # [x, y, z, w]
+            orientation = np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])  # [w, x, y, z]
+        elif self.pose_type == '6d':
+            col1 = rotation_matrix[:, 0]  # First column (3,)
+            col2 = rotation_matrix[:, 1]  # Second column (3,)
+            orientation = np.concatenate([col1, col2], axis=-1)  # Shape: (6,)
+        else:
+            orientation = r.as_euler(str='XYZ')
+            
+
         # Combine position and quaternion into 7D vector
-        pose_7d = np.concatenate([position, quat_wxyz])
+        pose_7d = np.concatenate([position, orientation])
         
         return pose_7d
     
