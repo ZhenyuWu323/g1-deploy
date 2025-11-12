@@ -19,7 +19,7 @@ from config import CONFIG_PATH
 from apriltag_camera import AprilTagDetector
 from common.circular_buffer import CircularBuffer
 
-USE_RESIDUAL = True
+USE_RESIDUAL = False
 ENCODER_HISTORY_STEP = 32
 POSE_TYPE = '6d'
 
@@ -48,7 +48,8 @@ if __name__ == "__main__":
         config = yaml.load(f, Loader=yaml.FullLoader)
         
 
-        xml_path = 'mujoco/g1_xml/scene_29dof.xml'
+        #xml_path = 'mujoco/g1_xml/scene_29dof.xml'
+        xml_path = 'mujoco/g1_description/g1_tray_holder.xml'
 
         simulation_duration = config["simulation_duration"]
         simulation_dt = config["simulation_dt"]
@@ -119,8 +120,9 @@ if __name__ == "__main__":
     policy_to_xml = []
     for i in range(1, m.njnt):
         jname = mujoco.mj_id2name(m, 3, i)
-        idx = policy_joints.index(jname)
-        policy_to_xml.append(idx)
+        if jname in policy_joints:
+            idx = policy_joints.index(jname)
+            policy_to_xml.append(idx)
 
     xml_to_policy = []
     for i in range(len(policy_to_xml)):
@@ -201,8 +203,8 @@ if __name__ == "__main__":
         start = time.time()
         while viewer.is_running() and time.time() - start < simulation_duration:
             step_start = time.time()
-            q_t = d.qpos[7:]
-            dq_t = d.qvel[6:]
+            q_t = d.qpos[7: 7 + num_actions]
+            dq_t = d.qvel[6: 6 + num_actions]
             tau = np.zeros(num_actions)
             tau_lower = pd_control(
                 target_lower_pos, # in sim
@@ -238,16 +240,16 @@ if __name__ == "__main__":
                 # Apply control signal here.
 
                 # create observation
-                qj = d.qpos[7:]
-                dqj = d.qvel[6:]
+                qj = d.qpos[7: 7 + num_actions]
+                dqj = d.qvel[6: 6 + num_actions]
                 quat = d.qpos[3:7]
                 omega = d.qvel[3:6]
 
                 qj = (qj - default_angles) * dof_pos_scale
                 dqj = dqj * dof_vel_scale
 
-                waist_yaw = d.qpos[7:][12]
-                waist_yaw_omega = d.qvel[6:][12]
+                waist_yaw = d.qpos[7: 7 + num_actions][12]
+                waist_yaw_omega = d.qvel[6: 6 + num_actions][12]
 
                 torso_quat, torso_ang_vel = transform_imu_data_pelvis_to_torso(
                     waist_yaw=waist_yaw, 

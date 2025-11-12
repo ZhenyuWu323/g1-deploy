@@ -1,3 +1,7 @@
+import os
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+
 import time
 import argparse
 import os
@@ -5,6 +9,8 @@ import mujoco.viewer
 import mujoco
 import numpy as np
 import torch
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
 import yaml
 from collections import deque
 from common.rotation_helper import transform_imu_data_pelvis_to_torso
@@ -12,8 +18,10 @@ from policy.policy_runner import ResidualPolicyRunner
 from config import CONFIG_PATH
 from apriltag_camera import AprilTagDetector
 from common.circular_buffer import CircularBuffer
-
+from utils import quat_apply
 USE_RESIDUAL = False
+ENCODER_HISTORY_STEP = 32
+POSE_TYPE = '6d'
 
 
 def get_gravity_orientation(quaternion):
@@ -34,43 +42,79 @@ def pd_control(target_q, q, kp, target_dq, dq, kd):
     """Calculates torques from position commands"""
     return (target_q - q) * kp + (target_dq - dq) * kd
 
+def apply_action(
+    num_actions,
+    d,
+    target_lower_pos,
+    target_upper_pos,
+    lower_body_joint2motor_idx,
+    upper_body_joint2motor_idx,
+    lower_body_kps,
+    upper_body_kps,
+    lower_body_kds,
+    upper_body_kds,
+):
+    """Apply action to the robot"""
+    q_t = d.qpos[7: 7 + num_actions]
+    dq_t = d.qvel[6: 6 + num_actions]
+    tau = np.zeros(num_actions)
+    tau_lower = pd_control(
+        target_lower_pos, # in sim
+        q_t[lower_body_joint2motor_idx],
+        lower_body_kps,
+        np.zeros_like(lower_body_kds),
+        dq_t[lower_body_joint2motor_idx], 
+        lower_body_kds)
+    for i in range(len(tau_lower)):
+        motor_idx = lower_body_joint2motor_idx[i]
+        tau[motor_idx] = tau_lower[i]
+
+    tau_upper = pd_control(
+        target_upper_pos, # in sim
+        q_t[upper_body_joint2motor_idx],
+        upper_body_kps,
+        np.zeros_like(upper_body_kds),
+        dq_t[upper_body_joint2motor_idx], 
+        upper_body_kds)
+    for i in range(len(tau_upper)):
+        motor_idx = upper_body_joint2motor_idx[i]
+        tau[motor_idx] = tau_upper[i]
+    return tau
+
 if __name__ == "__main__":
     
     with open(CONFIG_PATH / "g1_mujoco.yaml", "r") as f:
         config = yaml.load(f, Loader=yaml.FullLoader)
         
 
-        xml_path = 'mujoco/g1_xml/scene_29dof.xml'
+        #xml_path = 'mujoco/g1_xml/scene_29dof.xml'
+        xml_path = 'mujoco/g1_description/g1_tray_holder.xml'
 
         simulation_duration = config["simulation_duration"]
         simulation_dt = config["simulation_dt"]
         control_decimation = config["control_decimation"]
 
-        kps = np.array(config["kps"], dtype=np.float32)
-        kds = np.array(config["kds"], dtype=np.float32)
         policy_joints = config["policy_joints"]
         policy_lower_body_joints = config["policy_lower_body_joints"]
         policy_upper_body_joints = config["policy_upper_body_joints"]
         # idx: sim order, value: real motor id
-        upper_body_joint2motor_idx = [15, 22, 16, 23, 17, 24, 18, 25, 19, 26, 20, 27, 21, 28]
-        upper_body_kps=[40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40]
-        upper_body_kds=[10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]
-        upper_body_default_pos=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] #TODO: print check
+        upper_body_joint2motor_idx = config["upper_body_joint2motor_idx"]
+        upper_body_kps = np.array(config["upper_body_kps"], dtype=np.float32)
+        upper_body_kds = np.array(config["upper_body_kds"], dtype=np.float32)
+        upper_body_default_pos = np.array(config["upper_body_default_pos"], dtype=np.float32)
         
         # upper_body_default_pos=[ 0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,
         #  -1.5700,  1.5700,  0.0000,  0.0000,  0.0000,  0.0000] #TODO: print check
 
         # idx: sim order, value: real motor id
-        lower_body_joint2motor_idx=[12, 13, 14, 0, 6, 1, 7, 2, 8, 3, 9, 4, 10, 5, 11]
-        lower_body_kps= [200, 40, 40, 100, 100, 100, 100, 100, 100, 150, 150, 40, 40, 40, 40]
-        lower_body_kds= [5, 5, 5, 2, 2, 2, 2, 2, 2, 4, 4, 2, 2, 2, 2]
-        lower_body_default_pos=[0, 0, 0, -0.1, -0.1, 0, 0, 0, 0, 0.3, 0.3, -0.2, -0.2, 0, 0] #TODO: print check
+        lower_body_joint2motor_idx = config["lower_body_joint2motor_idx"]
+        lower_body_kps = np.array(config["lower_body_kps"], dtype=np.float32)
+        lower_body_kds = np.array(config["lower_body_kds"], dtype=np.float32)
+        lower_body_default_pos = np.array(config["lower_body_default_pos"], dtype=np.float32)
 
         # idx: sim order, value: real motor id
-        whole_body_joint2motor_idx=[0, 6, 12, 1, 7, 13, 2, 8, 14, 3, 9, 15, 22, 4, 10, 16, 23, 5, 11, 17, 24, 18, 25, 19, 26, 20, 27, 21, 28]
-        whole_body_default_pos=[-0.1, -0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.3, 0.3, 0.0,
-        0.0, -0.2, -0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        0.0, 0.0, 0.0] # order: sim order
+        whole_body_joint2motor_idx = config["whole_body_joint2motor_idx"]
+        whole_body_default_pos = config["whole_body_default_pos"]
         num_upper_actions=14
         num_lower_actions=15
 
@@ -79,7 +123,12 @@ if __name__ == "__main__":
         ang_vel_scale = config["ang_vel_scale"]
         dof_pos_scale = config["dof_pos_scale"]
         dof_vel_scale = config["dof_vel_scale"]
-        action_scale = config["action_scale"]
+        upper_body_action_scale = config["upper_body_action_scale"]
+        lower_body_action_scale = config["lower_body_action_scale"]
+        if isinstance(upper_body_action_scale, list):
+            upper_body_action_scale = np.array(upper_body_action_scale, dtype=np.float32)
+        if isinstance(lower_body_action_scale, list):
+            lower_body_action_scale = np.array(lower_body_action_scale, dtype=np.float32)
         cmd_scale = np.array(config["cmd_scale"], dtype=np.float32)
 
         num_actions = config["num_actions"]
@@ -99,7 +148,6 @@ if __name__ == "__main__":
     gravity_orientation_buff = CircularBuffer(max_len=5, data_shape=(3,))
     angular_velocity_buff = CircularBuffer(max_len=5, data_shape=(3,))
     action_buff = CircularBuffer(max_len=5, data_shape=(num_actions,))
-    gait_phase_buff = CircularBuffer(max_len=5, data_shape=(2,))
 
     counter = 0
 
@@ -111,45 +159,15 @@ if __name__ == "__main__":
     policy_to_xml = []
     for i in range(1, m.njnt):
         jname = mujoco.mj_id2name(m, 3, i)
-        idx = policy_joints.index(jname)
-        policy_to_xml.append(idx)
+        if jname in policy_joints:
+            idx = policy_joints.index(jname)
+            policy_to_xml.append(idx)
 
     xml_to_policy = []
     for i in range(len(policy_to_xml)):
         idx = policy_to_xml.index(i)
         xml_to_policy.append(idx)
 
-    # lower_policy_to_xml = []
-    # for i in range(1, m.njnt):
-    #     jname = mujoco.mj_id2name(m, 3, i)
-    #     if jname in policy_lower_body_joints:
-    #         idx = policy_lower_body_joints.index(jname)
-    #         lower_policy_to_xml.append(idx)
-    
-    # lower_xml_to_policy = []
-    # for i in range(len(lower_policy_to_xml)):
-    #     idx = lower_policy_to_xml.index(i)
-    #     lower_xml_to_policy.append(idx)
-
-    # print("lower_policy_to_xml:", lower_policy_to_xml)
-    # print("lower_xml_to_policy:", lower_xml_to_policy)
-
-
-    # upper_policy_to_xml = []
-    # for i in range(1, m.njnt):
-    #     jname = mujoco.mj_id2name(m, 3, i)
-    #     if jname in policy_upper_body_joints:
-    #         print(jname)
-    #         idx = policy_upper_body_joints.index(jname)
-    #         upper_policy_to_xml.append(idx)
-    
-    # upper_xml_to_policy = []
-    # for i in range(len(upper_policy_to_xml)):
-    #     idx = upper_policy_to_xml.index(i)
-    #     upper_xml_to_policy.append(idx)
-
-    # print("upper_policy_to_xml:", upper_policy_to_xml)
-    # print("upper_xml_to_policy:", upper_xml_to_policy)
 
     default_angles = default_angles[policy_to_xml]
     target_dof_pos = default_angles.copy()
@@ -166,19 +184,60 @@ if __name__ == "__main__":
         vel_command_buff.append(np.zeros(3, dtype=np.float32))
         gravity_orientation_buff.append(np.zeros(3, dtype=np.float32))
         angular_velocity_buff.append(np.zeros(3, dtype=np.float32))
-        gait_phase_buff.append(np.zeros(2, dtype=np.float32))
 
         frame_stack.append(obs.copy())
         mujoco.mj_step(m, d) 
 
+    
+    # ============================================
+    # Move to default pos
+    # ============================================
+    # reset robot
+    for i in range(20):
+        tau = apply_action(
+            num_actions,
+            d,
+            lower_body_default_pos,
+            upper_body_default_pos,
+            lower_body_joint2motor_idx,
+            upper_body_joint2motor_idx,
+            lower_body_kps,
+            upper_body_kps,
+            lower_body_kds,
+            upper_body_kds,
+        )
+        d.ctrl[:] = tau
+        mujoco.mj_step(m, d)
+    # reset box
+    box_joint_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, "box_joint")
+    box_qpos_adr = m.jnt_qposadr[box_joint_id]
+    box_qvel_adr = m.jnt_dofadr[box_joint_id]
+    pelvis_pos = d.qpos[0:3]     
+    pelvis_quat = d.qpos[3:7]
+    isaac_relative_offset = np.array([0.31225, 0.0, 0.13900])
+    relative_offset_with_height = isaac_relative_offset
+    world_offset = quat_apply(pelvis_quat, relative_offset_with_height)
+    target_box_pos = pelvis_pos + world_offset
+    target_box_quat = pelvis_quat.copy()    
 
-    # load policy
-    #policy = torch.jit.load(policy_path)
+    # write box pos and quat
+    d.qpos[box_qpos_adr : box_qpos_adr+3] = target_box_pos
+    d.qpos[box_qpos_adr+3 : box_qpos_adr+7] = target_box_quat
+    
+    # write box vel to 0
+    d.qvel[box_qvel_adr : box_qvel_adr+6] = np.zeros(6)
+    
+    # step to apply box pos and quat
+    mujoco.mj_step(m, d)
+
 
     policy_runner = ResidualPolicyRunner(use_residual=USE_RESIDUAL)
     apriltag_detector = None
     if USE_RESIDUAL:
-        apriltag_detector = AprilTagDetector()
+        apriltag_detector = AprilTagDetector(
+            history_length=ENCODER_HISTORY_STEP,
+            pose_type=POSE_TYPE
+        )
         apriltag_detector.start()
         time.sleep(2)
 
@@ -186,38 +245,25 @@ if __name__ == "__main__":
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
         viewer.cam.trackbodyid = 0  
         viewer.cam.distance = 1.5   
-        viewer.cam.elevation = -15  
+        viewer.cam.elevation = -15
+          
         # Close the viewer automatically after simulation_duration wall-seconds.
         start = time.time()
         while viewer.is_running() and time.time() - start < simulation_duration:
             step_start = time.time()
-            q_t = d.qpos[7:]
-            dq_t = d.qvel[6:]
-            tau = np.zeros(num_actions)
-            tau_lower = pd_control(
-                target_lower_pos, # in sim
-                q_t[lower_body_joint2motor_idx],
+            tau = apply_action(
+                num_actions,
+                d,
+                target_lower_pos,
+                target_upper_pos,
+                lower_body_joint2motor_idx,
+                upper_body_joint2motor_idx,
                 lower_body_kps,
-                np.zeros_like(lower_body_kds),
-                dq_t[lower_body_joint2motor_idx], 
-                lower_body_kds)
-            for i in range(len(tau_lower)):
-                motor_idx = lower_body_joint2motor_idx[i]
-                tau[motor_idx] = tau_lower[i]
-
-            tau_upper = pd_control(
-                target_upper_pos, # in sim
-                q_t[upper_body_joint2motor_idx],
                 upper_body_kps,
-                np.zeros_like(upper_body_kds),
-                dq_t[upper_body_joint2motor_idx], 
-                upper_body_kds)
-            for i in range(len(tau_upper)):
-                motor_idx = upper_body_joint2motor_idx[i]
-                tau[motor_idx] = tau_upper[i]
+                lower_body_kds,
+                upper_body_kds,
+            )
 
-
-            #tau = pd_control(target_dof_pos, d.qpos[7:], kps, np.zeros_like(kds), d.qvel[6:], kds)
             d.ctrl[:] = tau
             # mj_step can be replaced with code that also evaluates
             # a policy and applies a control signal before stepping the physics.
@@ -228,16 +274,16 @@ if __name__ == "__main__":
                 # Apply control signal here.
 
                 # create observation
-                qj = d.qpos[7:]
-                dqj = d.qvel[6:]
+                qj = d.qpos[7: 7 + num_actions]
+                dqj = d.qvel[6: 6 + num_actions]
                 quat = d.qpos[3:7]
                 omega = d.qvel[3:6]
 
                 qj = (qj - default_angles) * dof_pos_scale
                 dqj = dqj * dof_vel_scale
 
-                waist_yaw = d.qpos[7:][12]
-                waist_yaw_omega = d.qvel[6:][12]
+                waist_yaw = d.qpos[7: 7 + num_actions][12]
+                waist_yaw_omega = d.qvel[6: 6 + num_actions][12]
 
                 torso_quat, torso_ang_vel = transform_imu_data_pelvis_to_torso(
                     waist_yaw=waist_yaw, 
@@ -246,42 +292,17 @@ if __name__ == "__main__":
                     pelvis_omega=omega
                 )
 
-
                 gravity_orientation = get_gravity_orientation(quat)
-                #torso_ang_vel = torso_ang_vel * ang_vel_scale
                 omega = omega * ang_vel_scale
-
-                period = 0.8
                 count = counter * simulation_dt
-                phase = count % period / period
-                sin_phase = np.sin(2 * np.pi * phase)
-                cos_phase = np.cos(2 * np.pi * phase)
 
-                # obs[:3] = omega
-                # obs[3:6] = gravity_orientation
-                # obs[6:9] = cmd * cmd_scale
-                # obs[9 : 9 + num_actions] = qj[xml_to_policy]
-                # obs[9 + num_actions : 9 + 2 * num_actions] = dqj[xml_to_policy]
-                # obs[9 + 2 * num_actions : 9 + 3 * num_actions] = action
-
-                # frame_stack.append(obs.copy())
-                # stacked_obs = np.concatenate(frame_stack, axis=0)
-                # residual_action_buff.append(residual_action)
-                
-                
-                # obs_omega = np.asarray(stacked_obs).reshape(5, 96)[:, 0:3].reshape(-1)
-                # obs_gravity_orientation = np.asarray(stacked_obs).reshape(5, 96)[:, 3:6].reshape(-1)
-                # obs_cmd = np.asarray(stacked_obs).reshape(5, 96)[:, 6:9].reshape(-1)
-                # obs_pos = np.asarray(stacked_obs).reshape(5, 96)[:, 9:9 + num_actions].reshape(-1)
-                # obs_vel = np.asarray(stacked_obs).reshape(5, 96)[:, 9 + num_actions : 9 + 2 * num_actions].reshape(-1)
-                # obs_action = np.asarray(stacked_obs).reshape(5, 96)[:, 9 + 2 * num_actions : 9 + 3 * num_actions].reshape(-1)
                 action_buff.append(action.copy())
+                residual_action_buff.append(residual_action.copy())
                 joint_pos_buff.append(qj[xml_to_policy].copy())
                 joint_vel_buff.append(dqj[xml_to_policy].copy())
                 vel_command_buff.append(cmd.copy() * cmd_scale)
                 gravity_orientation_buff.append(gravity_orientation.copy())
                 angular_velocity_buff.append(omega.copy())
-                gait_phase_buff.append(np.array([sin_phase, cos_phase], dtype=np.float32))
 
                 obs_omega = angular_velocity_buff.get_history(5).flatten()
                 obs_gravity_orientation = gravity_orientation_buff.get_history(5).flatten()
@@ -289,17 +310,14 @@ if __name__ == "__main__":
                 obs_pos = joint_pos_buff.get_history(5).flatten()
                 obs_vel = joint_vel_buff.get_history(5).flatten()
                 obs_action = action_buff.get_history(5).flatten()
-                obs_gait_phase = gait_phase_buff.get_history(5).flatten()
                 
                 big_group_major = np.concatenate([
                     obs_omega,
                     obs_gravity_orientation,
                     obs_cmd,
-                    #upper_body_default_pos,
                     obs_pos,
                     obs_vel,
                     obs_action,
-                    obs_gait_phase,
                 ], axis=0)
                 big_group_major = np.clip(big_group_major, -100, 100)
                 obs_tensor = torch.from_numpy(big_group_major).float().unsqueeze(0)
@@ -310,7 +328,6 @@ if __name__ == "__main__":
                         obs_omega,
                         obs_gravity_orientation,
                         obs_cmd,
-                        #upper_body_default_pos,
                         obs_pos,
                         obs_vel,
                         obs_residual_action
@@ -319,6 +336,7 @@ if __name__ == "__main__":
                     residual_obs_tensor = torch.from_numpy(residual_actor_obs).float().unsqueeze(0)
                     
                     object_pos = apriltag_detector.get_object_obs()
+                    object_pos = np.clip(object_pos, -100, 100)
                     object_tensor = torch.from_numpy(object_pos).float().unsqueeze(0)
                     # residual action
                     residual_action = policy_runner.act_residual(residual_obs_tensor, object_tensor).detach().numpy().squeeze()
@@ -327,17 +345,13 @@ if __name__ == "__main__":
                 # base action
                 action = policy_runner.act_base(obs_tensor).detach().numpy().squeeze()
                 action = np.clip(action, -100, 100)
-                #print(residual_action)
                 final_action = action + residual_action
-                upper_action = action[:num_upper_actions]
-                lower_action = action[num_upper_actions:]
+                upper_action = final_action[:num_upper_actions]
+                lower_action = final_action[num_upper_actions:]
 
-                target_lower_pos = lower_action * action_scale + lower_body_default_pos
-                target_upper_pos = upper_action * action_scale + upper_body_default_pos
-                #action = policy(obs_tensor).detach().numpy().squeeze()
-                #action = action[policy_to_xml]
-                # transform action to target_dof_pos
-                #target_dof_pos = action * action_scale + default_angles
+                target_lower_pos = lower_action * lower_body_action_scale + lower_body_default_pos
+                target_upper_pos = upper_action * upper_body_action_scale + upper_body_default_pos
+                
 
             # Pick up changes to the physics state, apply perturbations, update options from GUI.
             viewer.sync()
