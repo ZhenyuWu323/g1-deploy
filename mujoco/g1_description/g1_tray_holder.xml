@@ -460,8 +460,25 @@
     </body>
     
     <!-- Object -->
-    <body name="object" pos="0.30225 0.0 0.993">  <!-- plate_z + plate_height + object_height -->
-      <geom name="object_geom" type="cylinder" size="0.02 0.05" rgba="0 0 1 1" mass="0.05"/>
+    <body name="object" pos="0.30225 0.0 0.993">
+      <!-- 外壳 - 薄壁圆柱 -->
+      <geom name="cup_wall" type="cylinder" size="0.025 0.05" 
+            rgba="0.8 0.8 0.8 1" mass="0.03"
+            friction="0.6 0.005 0.0001"/>
+      
+      <!-- 底部 - 稍厚 -->
+      <geom name="cup_bottom" type="cylinder" size="0.025 0.005" 
+            pos="0 0 -0.055" rgba="0.8 0.8 0.8 1" mass="0.015"/>
+      
+      <!-- 水/液体（如果有）-->
+      <geom name="liquid" type="cylinder" size="0.020 0.03" 
+            pos="0 0 -0.02" rgba="0.3 0.5 1 0.6" mass="0.055"
+            contype="0" conaffinity="0"/>  <!-- 不参与碰撞 -->
+      
+      <!-- 总质心会偏低（因为水在底部）-->
+      <inertial pos="0 0 -0.015" mass="0.1"
+                diaginertia="0.0003 0.0003 0.00008"/>
+      
       <freejoint/>
     </body>
   </worldbody>

@@ -24,9 +24,9 @@ import select
 import sys
 
 USE_RESIDUAL = False
-ENCODER_HISTORY_STEP = 5
+ENCODER_HISTORY_STEP = 32
 POSE_TYPE = 'quat'
-
+ACTUATOR_CONFIG = 'mimic'
 
 def get_gravity_orientation(quaternion):
     qw = quaternion[0]
@@ -114,6 +114,11 @@ def get_camera_frame_pos(data, model, orientation_type='quat'):
         object_camera_orientation = np.array([object_camera_rotation[3], object_camera_rotation[0], object_camera_rotation[1], object_camera_rotation[2]])
     elif orientation_type == 'euler':
         object_camera_orientation = object_camera_rotation.as_euler(seq='XYZ', degrees=True)
+    elif orientation_type == '6d':
+        rotation_matrix = object_camera_transform[:3, :3]
+        col1 = rotation_matrix[:, 0]  # First column (3,)
+        col2 = rotation_matrix[:, 1]  # Second column (3,)
+        object_camera_orientation = np.concatenate([col1, col2], axis=-1)  # Shape: (6,)
     else:
         raise ValueError(f"Invalid orientation type: {orientation_type}")
 
@@ -152,17 +157,14 @@ if __name__ == "__main__":
         policy_upper_body_joints = config["policy_upper_body_joints"]
         # idx: sim order, value: real motor id
         upper_body_joint2motor_idx = config["upper_body_joint2motor_idx"]
-        upper_body_kps = np.array(config["upper_body_kps"], dtype=np.float32)
-        upper_body_kds = np.array(config["upper_body_kds"], dtype=np.float32)
+        upper_body_kps = np.array(config["actuator_config"][ACTUATOR_CONFIG]["upper_body_kps"], dtype=np.float32)
+        upper_body_kds = np.array(config["actuator_config"][ACTUATOR_CONFIG]["upper_body_kds"], dtype=np.float32)
         upper_body_default_pos = np.array(config["upper_body_default_pos"], dtype=np.float32)
-        
-        # upper_body_default_pos=[ 0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,
-        #  -1.5700,  1.5700,  0.0000,  0.0000,  0.0000,  0.0000] #TODO: print check
 
         # idx: sim order, value: real motor id
         lower_body_joint2motor_idx = config["lower_body_joint2motor_idx"]
-        lower_body_kps = np.array(config["lower_body_kps"], dtype=np.float32)
-        lower_body_kds = np.array(config["lower_body_kds"], dtype=np.float32)
+        lower_body_kps = np.array(config["actuator_config"][ACTUATOR_CONFIG]["lower_body_kps"], dtype=np.float32)
+        lower_body_kds = np.array(config["actuator_config"][ACTUATOR_CONFIG]["lower_body_kds"], dtype=np.float32)
         lower_body_default_pos = np.array(config["lower_body_default_pos"], dtype=np.float32)
 
         # idx: sim order, value: real motor id
@@ -176,8 +178,8 @@ if __name__ == "__main__":
         ang_vel_scale = config["ang_vel_scale"]
         dof_pos_scale = config["dof_pos_scale"]
         dof_vel_scale = config["dof_vel_scale"]
-        upper_body_action_scale = config["upper_body_action_scale"]
-        lower_body_action_scale = config["lower_body_action_scale"]
+        upper_body_action_scale = config["actuator_config"][ACTUATOR_CONFIG]["upper_body_action_scale"]
+        lower_body_action_scale = config["actuator_config"][ACTUATOR_CONFIG]["lower_body_action_scale"]
         if isinstance(upper_body_action_scale, list):
             upper_body_action_scale = np.array(upper_body_action_scale, dtype=np.float32)
         if isinstance(lower_body_action_scale, list):

@@ -18,7 +18,7 @@ residual_whole_body_policy:
   num_actions: 29
   num_actor_obs: 480
   num_encoder_obs: 7
-  num_time_steps: 5
+  num_time_steps: 32
   num_encoder_output: 32
   actor_hidden_dims: [512, 256, 128]
   encoder_d_model: 32
