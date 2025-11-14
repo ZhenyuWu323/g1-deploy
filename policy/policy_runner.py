@@ -11,7 +11,7 @@ class ResidualPolicyRunner():
 
     def __init__(self, use_residual=True):
         # load configs and checkpoints
-        self.checkpoint = CHECKPOINT_PATH / 'model_1900.pt'
+        self.checkpoint = CHECKPOINT_PATH / 'model_9500.pt'
         self.policy_cfg = CONFIG_PATH / 'policy.yaml'
         assert self.checkpoint.exists(), f"Checkpoint not found: {self.checkpoint}"
         assert self.policy_cfg.exists(), f"Config file not found: {self.policy_cfg}"

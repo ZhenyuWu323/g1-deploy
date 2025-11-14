@@ -25,7 +25,7 @@ import sys
 
 USE_RESIDUAL = False
 ENCODER_HISTORY_STEP = 32
-POSE_TYPE = 'quat'
+POSE_TYPE = '6d'
 ACTUATOR_CONFIG = 'mimic'
 
 def get_gravity_orientation(quaternion):

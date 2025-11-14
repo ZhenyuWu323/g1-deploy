@@ -1,7 +1,17 @@
 <mujoco model="g1_tray_holder">
   <compiler angle="radian" meshdir="meshes/"/>
 
+  <option timestep="0.0005" iterations="100" integrator="RK4">
+    <flag warmstart="enable"/>
+  </option>
+
+
   <default>
+    <default class="contact">
+      <geom contype="1" conaffinity="1" condim="3" 
+            solref="0.002 1" solimp="0.9 0.95 0.001"/>
+    </default>
+
     <default class="torso_motor">
       <joint damping="0.05" armature="0.01" frictionloss="0.2"/>
     </default>
@@ -224,10 +234,10 @@
                           <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="left_wrist_yaw_link"/>
                           <geom pos="0.0414958 -3.8e-06 -5e-07" quat="0.499951 -0.500077 0.499953 0.500019" type="mesh" contype="0" conaffinity="0" group="1" density="0" mesh="left_tray_holder_link_node__mesh_"/>
                           <!-- <geom pos="0.0414958 -3.8e-06 -5e-07" quat="0.499951 -0.500077 0.499953 0.500019" type="mesh" mesh="left_tray_holder_link_node__mesh_"/> -->
-                          <geom type="box" pos="0.06 -3.8e-06 0.042" size="0.10 0.08 0.002" rgba="0 0 0 1" margin="0.0005"/> 
-                          <geom type="box" pos="0.06 0.038 0.06" size="0.1 0.0025 0.016" rgba="0 0 0 1" margin="0.0005"/>
-                          <geom type="box" pos="0.06 0.02 0.068" size="0.1 0.02 0.0025" rgba="0 0 0 1" margin="0.0005"/>
-                          <geom type="box" pos="-0.037 0.015 0.06" size="0.0025 0.02 0.016" rgba="0 0 0 1" margin="0.0005"/>
+                          <geom type="box" pos="0.06 -3.8e-06 0.042" size="0.10 0.08 0.002" rgba="0 0 0 1" /> 
+                          <geom type="box" pos="0.06 0.038 0.06" size="0.1 0.0025 0.016" rgba="0 0 0 1" />
+                          <geom type="box" pos="0.06 0.02 0.068" size="0.1 0.02 0.0025" rgba="0 0 0 1" />
+                          <geom type="box" pos="-0.037 0.015 0.06" size="0.0025 0.02 0.016" rgba="0 0 0 1"/>
                         </body>
                       </body>
                     </body>
@@ -279,10 +289,10 @@
                           <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="right_wrist_yaw_link"/>
                           <geom pos="0.0414958 3.8e-06 -5e-07" quat="0.500077 -0.499951 0.500019 0.499953" type="mesh" contype="0" conaffinity="0" group="1" density="0" mesh="right_tray_holder_link_node__mesh_"/>
                           <!-- <geom pos="0.0414958 3.8e-06 -5e-07" quat="0.500077 -0.499951 0.500019 0.499953" type="mesh" mesh="right_tray_holder_link_node__mesh_"/> -->
-                          <geom type="box" pos="0.06 -3.8e-06 0.042" size="0.10 0.08 0.002" rgba="0 0 0 1" margin="0.0005"/> 
-                          <geom type="box" pos="0.06 -0.038 0.06" size="0.1 0.0025 0.016" rgba="0 0 0 1" margin="0.0005"/>
-                          <geom type="box" pos="0.06 -0.02 0.068" size="0.1 0.02 0.0025" rgba="0 0 0 1" margin="0.0005"/>
-                          <geom type="box" pos="-0.037 -0.015 0.06" size="0.0025 0.02 0.016" rgba="0 0 0 1" margin="0.0005"/>
+                          <geom type="box" pos="0.06 -3.8e-06 0.042" size="0.10 0.08 0.002" rgba="0 0 0 1" /> 
+                          <geom type="box" pos="0.06 -0.038 0.06" size="0.1 0.0025 0.016" rgba="0 0 0 1" />
+                          <geom type="box" pos="0.06 -0.02 0.068" size="0.1 0.02 0.0025" rgba="0 0 0 1" />
+                          <geom type="box" pos="-0.037 -0.015 0.06" size="0.0025 0.02 0.016" rgba="0 0 0 1" />
                         </body>
                       </body>
                     </body>
@@ -455,27 +465,23 @@
   <worldbody>
     <!-- Plate -->
     <body name="plate" pos="0.30225 0.0 0.93400">
-      <geom name="plate_geom" type="box" size="0.12 0.17 0.009" rgba="1 0 0 1" mass="0.01"/> 
+      <geom name="plate_geom" type="box" size="0.12 0.17 0.004" rgba="1 0 0 1" mass="0.5" class="contact"/> 
       <freejoint/>
     </body>
     
     <!-- Object -->
-    <body name="object" pos="0.30225 0.0 0.993">
-      <!-- 外壳 - 薄壁圆柱 -->
-      <geom name="cup_wall" type="cylinder" size="0.025 0.05" 
+    <body name="object" pos="0.30225 0.0 1.038"> <!-- 0.934 + plate z + wall z-->
+      <geom name="cup_wall" type="cylinder" size="0.025 0.1" 
             rgba="0.8 0.8 0.8 1" mass="0.03"
             friction="0.6 0.005 0.0001"/>
-      
-      <!-- 底部 - 稍厚 -->
+    
       <geom name="cup_bottom" type="cylinder" size="0.025 0.005" 
             pos="0 0 -0.055" rgba="0.8 0.8 0.8 1" mass="0.015"/>
       
-      <!-- 水/液体（如果有）-->
-      <geom name="liquid" type="cylinder" size="0.020 0.03" 
+      <geom name="liquid" type="cylinder" size="0.020 0.05" 
             pos="0 0 -0.02" rgba="0.3 0.5 1 0.6" mass="0.055"
-            contype="0" conaffinity="0"/>  <!-- 不参与碰撞 -->
+            contype="0" conaffinity="0"/>  
       
-      <!-- 总质心会偏低（因为水在底部）-->
       <inertial pos="0 0 -0.015" mass="0.1"
                 diaginertia="0.0003 0.0003 0.00008"/>
       
