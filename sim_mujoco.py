@@ -13,7 +13,7 @@ torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
 import yaml
 from collections import deque
-from common.rotation_helper import transform_imu_data_pelvis_to_torso
+from common.rotation_helper import transform_imu_data_pelvis_to_torso, is_object_bad_orientation, is_torso_bad_orientation
 from policy.policy_runner import ResidualPolicyRunner
 from config import CONFIG_PATH
 from common.circular_buffer import CircularBuffer
@@ -24,6 +24,7 @@ import select
 import sys
 
 USE_RESIDUAL = False
+LOAD_RESIDUAL = True
 ENCODER_HISTORY_STEP = 32
 POSE_TYPE = '6d'
 ACTUATOR_CONFIG = 'mimic'
@@ -108,10 +109,11 @@ def get_camera_frame_pos(data, model, orientation_type='quat'):
     object_camera_pos = object_camera_transform[:3, 3]
     object_camera_rotation = Rotation.from_matrix(object_camera_transform[:3, :3])
     object_camera_orientation = None
+    object_camera_quat = object_camera_rotation.as_quat()
+    object_camera_quat = np.array([object_camera_quat[3], object_camera_quat[0], object_camera_quat[1], object_camera_quat[2]])
 
     if orientation_type == 'quat':
-        object_camera_rotation = object_camera_rotation.as_quat()
-        object_camera_orientation = np.array([object_camera_rotation[3], object_camera_rotation[0], object_camera_rotation[1], object_camera_rotation[2]])
+        object_camera_orientation = object_camera_quat
     elif orientation_type == 'euler':
         object_camera_orientation = object_camera_rotation.as_euler(seq='XYZ', degrees=True)
     elif orientation_type == '6d':
@@ -122,7 +124,10 @@ def get_camera_frame_pos(data, model, orientation_type='quat'):
     else:
         raise ValueError(f"Invalid orientation type: {orientation_type}")
 
-    return object_camera_pos, object_camera_orientation
+    return object_camera_pos, object_camera_orientation, object_camera_quat
+
+
+    
 
 def keyboard_listener():
     global USE_RESIDUAL
@@ -270,7 +275,7 @@ if __name__ == "__main__":
     mujoco.mj_forward(m, d)
 
 
-    policy_runner = ResidualPolicyRunner(use_residual=True)
+    policy_runner = ResidualPolicyRunner(use_residual=LOAD_RESIDUAL)
 
     keyboard_thread = threading.Thread(target=keyboard_listener, daemon=True)
     keyboard_thread.start()
@@ -321,7 +326,7 @@ if __name__ == "__main__":
                     quat = d.qpos[3:7]
                     omega = d.qvel[3:6]
 
-                    camera_frame_pos, camera_frame_orientation = get_camera_frame_pos(d, m, POSE_TYPE)
+                    camera_frame_pos, camera_frame_orientation, camera_frame_quat = get_camera_frame_pos(d, m, POSE_TYPE)
                     camera_frame_obs = np.concatenate([camera_frame_pos, camera_frame_orientation], axis=0)
                     object_pos_buff.append(camera_frame_obs.copy())
 
@@ -368,7 +373,28 @@ if __name__ == "__main__":
                     big_group_major = np.clip(big_group_major, -100, 100)
                     obs_tensor = torch.from_numpy(big_group_major).float().unsqueeze(0)
 
-                    if USE_RESIDUAL:
+                    """
+                    Residual Gate
+                    """
+                    use_residual_this_step = USE_RESIDUAL
+                    if use_residual_this_step:
+                        waist_yaw = d.qpos[7 + 12]
+                        waist_roll = d.qpos[7 + 13]
+                        waist_pitch = d.qpos[7 + 14]
+                        waist_euler_xyz = np.array([waist_roll, waist_pitch, waist_yaw])
+                        pelvis_quat = d.qpos[3:7]
+                        torso_bad = is_torso_bad_orientation(waist_euler_xyz, pelvis_quat, 5)
+                        if torso_bad:
+                            use_residual_this_step = False
+                            print(f"[WARNING] TORSO BAD - Residual DISABLED")
+                        
+                        object_bad = is_object_bad_orientation(waist_euler_xyz, pelvis_quat, camera_frame_quat, 30)
+                        if object_bad:
+                            use_residual_this_step = False
+                            print(f"[WARNING] OBJECT BAD - Residual DISABLED")
+
+
+                    if use_residual_this_step:
                         obs_residual_action = residual_action_buff.get_history(5).flatten()
                         residual_actor_obs = np.concatenate([
                             obs_omega,
@@ -387,6 +413,8 @@ if __name__ == "__main__":
                         # residual action
                         residual_action = policy_runner.act_residual(residual_obs_tensor, object_tensor).detach().numpy().squeeze()
                         residual_action = np.clip(residual_action, -100, 100)
+                    else:
+                        residual_action = np.zeros(num_actions)
 
                     # base action
                     action = policy_runner.act_base(obs_tensor).detach().numpy().squeeze()

@@ -20,27 +20,37 @@ from unitree_sdk2py.idl.unitree_go.msg.dds_ import LowState_ as LowStateGo
 from unitree_sdk2py.utils.crc import CRC
 
 from common.command_helper import create_damping_cmd, create_zero_cmd, init_cmd_hg, init_cmd_go, MotorMode
-from common.rotation_helper import get_gravity_orientation, transform_imu_data
+from common.rotation_helper import get_gravity_orientation, transform_imu_data, is_object_bad_orientation, is_torso_bad_orientation
 from common.remote_controller import RemoteController, KeyMap
 from config import Config
 from policy.policy_runner import ResidualPolicyRunner
 from common.circular_buffer import CircularBuffer
 from apriltag_camera import AprilTagDetector
+LOAD_RESIDUAL=True
 USE_RESIDUAL=False
+ENCODER_HISTORY_STEP = 32
+POSE_TYPE = '6d'
+ACTUATOR_CONFIG = 'mimic'
 
 class Controller:
-    def __init__(self, config: Config, use_residual=True) -> None:
+    def __init__(self, config: Config, load_residual=False, use_residual=False) -> None:
+        if use_residual and not load_residual:
+            raise ValueError("Cannot use_residual without load_residual!")
+        
         self.config = config
         self.remote_controller = RemoteController()
 
         # Initialize the policy network
-        self.policy_runner = ResidualPolicyRunner(use_residual=use_residual)
+        self.policy_runner = ResidualPolicyRunner(use_residual=load_residual)
+        self.use_residual = use_residual
 
         # Initialize camera
         self.apriltag_detector = None
-        self.use_residual = use_residual
-        if use_residual:
-            self.apriltag_detector = AprilTagDetector()
+        if load_residual:
+            self.apriltag_detector = AprilTagDetector(
+                history_length=ENCODER_HISTORY_STEP,
+                pose_type=POSE_TYPE
+            )
             self.apriltag_detector.start()
             time.sleep(2)
         # Initializing process variables
@@ -53,6 +63,7 @@ class Controller:
         self.residual_obs = np.zeros(config.num_obs, dtype=np.float32)
         self.cmd = np.array([0.0, 0, 0])
         self.counter = 0
+        self.button_states = {}
 
         # Initialize circular buffer
         self.joint_pos_buff = CircularBuffer(max_len=config.history_length, data_shape=(config.num_actions,))
@@ -155,6 +166,12 @@ class Controller:
                 self.low_cmd.motor_cmd[motor_idx].tau = 0
             self.send_cmd(self.low_cmd)
             time.sleep(self.config.control_dt)
+
+    def is_button_pressed(self, key):
+        current = self.remote_controller.button[key]
+        last = self.button_states.get(key, 0)
+        self.button_states[key] = current
+        return current == 1 and last == 0
 
 
     def get_obs(self):
@@ -266,10 +283,35 @@ class Controller:
         self.action = self.policy_runner.act_base(obs_tensor).detach().numpy().squeeze()
         self.action = np.clip(self.action, -self.config.clip_action, self.config.clip_action)
         
-        
-        if self.use_residual:
+        """
+        Check for residual
+        """
+        use_residual_this_step = self.use_residual
+        if use_residual_this_step:
+            # check torso
+            waist_yaw = self.low_state.motor_state[12].q
+            waist_roll = self.low_state.motor_state[13].q
+            waist_pitch = self.low_state.motor_state[14].q
+            waist_euler_xyz = np.array([waist_roll, waist_pitch, waist_yaw])
+            pelvis_quat = self.low_state.imu_state.quaternion
+            torso_bad = is_torso_bad_orientation(waist_euler_xyz, pelvis_quat, 10)
+            if torso_bad:
+                use_residual_this_step = False
+                print(f"[WARNING] TORSO BAD - Residual DISABLED")
+
+            # check object
+            if use_residual_this_step and self.apriltag_detector is not None:
+                object_quat = self.apriltag_detector.get_last_quat()
+                object_bad = is_object_bad_orientation(waist_euler_xyz, pelvis_quat, object_quat, 30)
+                if object_bad:
+                    use_residual_this_step = False
+                    print(f"[WARNING] OBJECT BAD - Residual DISABLED")
+
+
+        if use_residual_this_step:
             # get camera obs
             object_obs = self.apriltag_detector.get_object_obs()
+            object_obs = np.clip(object_obs, -100, 100)
             object_obs_tensor = torch.from_numpy(object_obs).float().unsqueeze(0)
 
             # get residual actor obs
@@ -278,10 +320,11 @@ class Controller:
             residual_obs_tensor = torch.from_numpy(self.residual_obs).float().unsqueeze(0)
             self.residual_action = self.policy_runner.act_residual(residual_obs_tensor, object_obs_tensor).detach().numpy().squeeze()
             self.residual_action = np.clip(self.residual_action, -self.config.clip_action, self.config.clip_action)
-        
+        else:
+            self.residual_action = np.zeros(self.config.num_actions, dtype=np.float32)
         
         # transform action to target_dof_pos
-        final_action = self.action + self.residual_action
+        final_action = self.action + self.residual_action if use_residual_this_step else self.action
         upper_body_actions = final_action[:self.config.num_upper_actions]
         upper_body_target = self.config.upper_body_default_pos + upper_body_actions * self.config.upper_body_action_scale
 
@@ -312,7 +355,7 @@ class Controller:
         control_duration = time.time() - start_time
         time_til_next_step = self.config.control_dt - control_duration
         if time_til_next_step < 0:
-            print('f[WARNING] control over time')
+            print('[WARNING] control over time')
         else:
             time.sleep(time_til_next_step)
 
@@ -334,7 +377,7 @@ if __name__ == "__main__":
     # Initialize DDS communication
     ChannelFactoryInitialize(0, args.net)
 
-    controller = Controller(config, USE_RESIDUAL)
+    controller = Controller(config, LOAD_RESIDUAL, USE_RESIDUAL)
 
     # Enter the zero torque state, press the start key to continue executing
     controller.zero_torque_state()
@@ -348,6 +391,12 @@ if __name__ == "__main__":
 
     while True:
         try:
+            if controller.is_button_pressed(KeyMap.B):
+                controller.use_residual = not controller.use_residual
+                status = "ENABLED" if controller.use_residual else "DISABLED"
+                print(f"\n{'='*50}")
+                print(f"Residual Policy: {status}")
+                print(f"{'='*50}\n")
             controller.run()
             # Press the select key to exit
             if controller.remote_controller.button[KeyMap.select] == 1:
@@ -355,7 +404,7 @@ if __name__ == "__main__":
         except KeyboardInterrupt:
             break
     # Enter the damping state
-    if args.use_residual:
+    if LOAD_RESIDUAL:
         controller.apriltag_detector.stop()
     create_damping_cmd(controller.low_cmd)
     controller.send_cmd(controller.low_cmd)

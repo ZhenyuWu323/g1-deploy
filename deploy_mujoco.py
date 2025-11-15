@@ -13,15 +13,16 @@ torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
 import yaml
 from collections import deque
-from common.rotation_helper import transform_imu_data_pelvis_to_torso
+from common.rotation_helper import transform_imu_data_pelvis_to_torso,is_object_bad_orientation,is_torso_bad_orientation
 from policy.policy_runner import ResidualPolicyRunner
 from config import CONFIG_PATH
 from apriltag_camera import AprilTagDetector
 from common.circular_buffer import CircularBuffer
 
-USE_RESIDUAL = False
+USE_RESIDUAL = True
 ENCODER_HISTORY_STEP = 32
 POSE_TYPE = '6d'
+ACTUATOR_CONFIG = 'mimic'
 
 
 def get_gravity_orientation(quaternion):
@@ -60,19 +61,15 @@ if __name__ == "__main__":
         policy_upper_body_joints = config["policy_upper_body_joints"]
         # idx: sim order, value: real motor id
         upper_body_joint2motor_idx = config["upper_body_joint2motor_idx"]
-        upper_body_kps = np.array(config["upper_body_kps"], dtype=np.float32)
-        upper_body_kds = np.array(config["upper_body_kds"], dtype=np.float32)
+        upper_body_kps = np.array(config["actuator_config"][ACTUATOR_CONFIG]["upper_body_kps"], dtype=np.float32)
+        upper_body_kds = np.array(config["actuator_config"][ACTUATOR_CONFIG]["upper_body_kds"], dtype=np.float32)
         upper_body_default_pos = np.array(config["upper_body_default_pos"], dtype=np.float32)
-        
-        # upper_body_default_pos=[ 0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,  0.0000,
-        #  -1.5700,  1.5700,  0.0000,  0.0000,  0.0000,  0.0000] #TODO: print check
 
         # idx: sim order, value: real motor id
         lower_body_joint2motor_idx = config["lower_body_joint2motor_idx"]
-        lower_body_kps = np.array(config["lower_body_kps"], dtype=np.float32)
-        lower_body_kds = np.array(config["lower_body_kds"], dtype=np.float32)
+        lower_body_kps = np.array(config["actuator_config"][ACTUATOR_CONFIG]["lower_body_kps"], dtype=np.float32)
+        lower_body_kds = np.array(config["actuator_config"][ACTUATOR_CONFIG]["lower_body_kds"], dtype=np.float32)
         lower_body_default_pos = np.array(config["lower_body_default_pos"], dtype=np.float32)
-
         # idx: sim order, value: real motor id
         whole_body_joint2motor_idx = config["whole_body_joint2motor_idx"]
         whole_body_default_pos = config["whole_body_default_pos"]
@@ -84,8 +81,8 @@ if __name__ == "__main__":
         ang_vel_scale = config["ang_vel_scale"]
         dof_pos_scale = config["dof_pos_scale"]
         dof_vel_scale = config["dof_vel_scale"]
-        upper_body_action_scale = config["upper_body_action_scale"]
-        lower_body_action_scale = config["lower_body_action_scale"]
+        upper_body_action_scale = config["actuator_config"][ACTUATOR_CONFIG]["upper_body_action_scale"]
+        lower_body_action_scale = config["actuator_config"][ACTUATOR_CONFIG]["lower_body_action_scale"]
         if isinstance(upper_body_action_scale, list):
             upper_body_action_scale = np.array(upper_body_action_scale, dtype=np.float32)
         if isinstance(lower_body_action_scale, list):
@@ -129,37 +126,7 @@ if __name__ == "__main__":
         idx = policy_to_xml.index(i)
         xml_to_policy.append(idx)
 
-    # lower_policy_to_xml = []
-    # for i in range(1, m.njnt):
-    #     jname = mujoco.mj_id2name(m, 3, i)
-    #     if jname in policy_lower_body_joints:
-    #         idx = policy_lower_body_joints.index(jname)
-    #         lower_policy_to_xml.append(idx)
     
-    # lower_xml_to_policy = []
-    # for i in range(len(lower_policy_to_xml)):
-    #     idx = lower_policy_to_xml.index(i)
-    #     lower_xml_to_policy.append(idx)
-
-    # print("lower_policy_to_xml:", lower_policy_to_xml)
-    # print("lower_xml_to_policy:", lower_xml_to_policy)
-
-
-    # upper_policy_to_xml = []
-    # for i in range(1, m.njnt):
-    #     jname = mujoco.mj_id2name(m, 3, i)
-    #     if jname in policy_upper_body_joints:
-    #         print(jname)
-    #         idx = policy_upper_body_joints.index(jname)
-    #         upper_policy_to_xml.append(idx)
-    
-    # upper_xml_to_policy = []
-    # for i in range(len(upper_policy_to_xml)):
-    #     idx = upper_policy_to_xml.index(i)
-    #     upper_xml_to_policy.append(idx)
-
-    # print("upper_policy_to_xml:", upper_policy_to_xml)
-    # print("upper_xml_to_policy:", upper_xml_to_policy)
 
     default_angles = default_angles[policy_to_xml]
     target_dof_pos = default_angles.copy()
@@ -181,8 +148,6 @@ if __name__ == "__main__":
         mujoco.mj_step(m, d) 
 
 
-    # load policy
-    #policy = torch.jit.load(policy_path)
 
     policy_runner = ResidualPolicyRunner(use_residual=USE_RESIDUAL)
     apriltag_detector = None
@@ -310,7 +275,27 @@ if __name__ == "__main__":
                 big_group_major = np.clip(big_group_major, -100, 100)
                 obs_tensor = torch.from_numpy(big_group_major).float().unsqueeze(0)
 
-                if USE_RESIDUAL:
+                use_residual_this_step = USE_RESIDUAL
+                if use_residual_this_step:
+                    waist_yaw = d.qpos[7 + 12]
+                    waist_roll = d.qpos[7 + 13]
+                    waist_pitch = d.qpos[7 + 14]
+                    waist_euler_xyz = np.array([waist_roll, waist_pitch, waist_yaw])
+                    pelvis_quat = d.qpos[3:7]
+                    torso_bad = is_torso_bad_orientation(waist_euler_xyz, pelvis_quat, 5)
+                    if torso_bad:
+                        use_residual_this_step = False
+                        print(f"[WARNING] TORSO BAD - Residual DISABLED")
+                    
+                    object_camera_quat = apriltag_detector.get_last_quat()
+                    object_bad = is_object_bad_orientation(waist_euler_xyz, pelvis_quat, object_camera_quat, 30)
+                    if object_bad:
+                        use_residual_this_step = False
+                        print(f"[WARNING] OBJECT BAD - Residual DISABLED")
+
+
+
+                if use_residual_this_step:
                     obs_residual_action = residual_action_buff.get_history(5).flatten()
                     residual_actor_obs = np.concatenate([
                         obs_omega,
@@ -330,6 +315,8 @@ if __name__ == "__main__":
                     # residual action
                     residual_action = policy_runner.act_residual(residual_obs_tensor, object_tensor).detach().numpy().squeeze()
                     residual_action = np.clip(residual_action, -100, 100)
+                else:
+                    residual_action = np.zeros(num_actions, dtype=np.float32)
 
                 # base action
                 action = policy_runner.act_base(obs_tensor).detach().numpy().squeeze()

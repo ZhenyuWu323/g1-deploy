@@ -90,6 +90,7 @@ class AprilTagDetector:
         self.default_pose = np.zeros(data_shape)
         self.current_pos = np.zeros(data_shape)
         self.prev_pos = np.zeros(data_shape)
+        self.last_object_quat = np.zeros(4)
 
         # transform
         self.transform = np.eye(4,4)
@@ -157,9 +158,10 @@ class AprilTagDetector:
         # Convert rotation matrix to quaternion (w, x, y, z)
         r = Rotation.from_matrix(rotation_matrix)
         orientation = None
+        quat_xyzw = r.as_quat()  # [x, y, z, w]
+        quat_wxyz = np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])  # [w, x, y, z]
         if self.pose_type == 'quat':
-            quat_xyzw = r.as_quat()  # [x, y, z, w]
-            orientation = np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]])  # [w, x, y, z]
+            orientation = quat_wxyz
         elif self.pose_type == '6d':
             col1 = rotation_matrix[:, 0]  # First column (3,)
             col2 = rotation_matrix[:, 1]  # Second column (3,)
@@ -171,7 +173,7 @@ class AprilTagDetector:
         # Combine position and quaternion into 7D vector
         pose_7d = np.concatenate([position, orientation])
         
-        return pose_7d
+        return pose_7d, quat_wxyz
     
     
     def _detection_loop(self):
@@ -197,12 +199,13 @@ class AprilTagDetector:
                 for detection in detections:
                     if detection.tag_id == self.tag_id:
                         try:
-                            pose_7d = self._process_detection(detection)
+                            pose_7d, object_quat = self._process_detection(detection)
                             
                             # Add to buffer (thread-safe)
                             with self.detection_lock:
                                 self.prev_pos = pose_7d.copy()
                                 self.object_pose_buff.append(pose_7d)
+                                self.last_object_quat = object_quat
                             
                             target_detected = True
                             break  # Found target, no need to check other detections
@@ -265,6 +268,11 @@ class AprilTagDetector:
 
         with self.detection_lock:
             obs = self.object_pose_buff.get_history(1)
+        return obs
+    
+    def get_last_quat(self) -> np.ndarray:
+        with self.detection_lock:
+            obs = self.last_object_quat
         return obs
     
     def is_running(self) -> bool:
