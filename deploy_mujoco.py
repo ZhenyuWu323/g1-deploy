@@ -14,10 +14,12 @@ torch.set_num_interop_threads(1)
 import yaml
 from collections import deque
 from common.rotation_helper import transform_imu_data_pelvis_to_torso,is_object_bad_orientation,is_torso_bad_orientation
+from common.rotation_helper import get_object_gravity_orientation
 from policy.policy_runner import ResidualPolicyRunner
 from config import CONFIG_PATH
 from apriltag_camera import AprilTagDetector
 from common.circular_buffer import CircularBuffer
+from scipy.spatial.transform import Rotation as R
 
 USE_RESIDUAL = True
 ENCODER_HISTORY_STEP = 32
@@ -106,6 +108,7 @@ if __name__ == "__main__":
     gravity_orientation_buff = CircularBuffer(max_len=5, data_shape=(3,))
     angular_velocity_buff = CircularBuffer(max_len=5, data_shape=(3,))
     action_buff = CircularBuffer(max_len=5, data_shape=(num_actions,))
+    obj_gravity_orientation_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(3,))
 
     counter = 0
 
@@ -256,12 +259,12 @@ if __name__ == "__main__":
                 gravity_orientation_buff.append(gravity_orientation.copy())
                 angular_velocity_buff.append(omega.copy())
 
-                obs_omega = angular_velocity_buff.get_history(5).flatten()
-                obs_gravity_orientation = gravity_orientation_buff.get_history(5).flatten()
-                obs_cmd = vel_command_buff.get_history(5).flatten()
-                obs_pos = joint_pos_buff.get_history(5).flatten()
-                obs_vel = joint_vel_buff.get_history(5).flatten()
-                obs_action = action_buff.get_history(5).flatten()
+                obs_omega = angular_velocity_buff.buffer.flatten()
+                obs_gravity_orientation = gravity_orientation_buff.buffer.flatten()
+                obs_cmd = vel_command_buff.buffer.flatten()
+                obs_pos = joint_pos_buff.buffer.flatten()
+                obs_vel = joint_vel_buff.buffer.flatten()
+                obs_action = action_buff.buffer.flatten()
                 
                 big_group_major = np.concatenate([
                     obs_omega,
@@ -284,19 +287,21 @@ if __name__ == "__main__":
                     pelvis_quat = d.qpos[3:7]
                     torso_bad = is_torso_bad_orientation(waist_euler_xyz, pelvis_quat, 5)
                     if torso_bad:
-                        use_residual_this_step = False
+                        #use_residual_this_step = False
                         print(f"[WARNING] TORSO BAD - Residual DISABLED")
                     
                     object_camera_quat = apriltag_detector.get_last_quat()
+                    object_proj_gravity = get_object_gravity_orientation(object_camera_quat, waist_euler_xyz, pelvis_quat)
+                    obj_gravity_orientation_buff.append(object_proj_gravity)
                     object_bad = is_object_bad_orientation(waist_euler_xyz, pelvis_quat, object_camera_quat, 30)
                     if object_bad:
-                        use_residual_this_step = False
-                        print(f"[WARNING] OBJECT BAD - Residual DISABLED")
+                        #use_residual_this_step = False
+                        print(f"[WARNING] OBJECT BAD - Residual DISABLED: {object_proj_gravity}")
 
 
 
                 if use_residual_this_step:
-                    obs_residual_action = residual_action_buff.get_history(5).flatten()
+                    obs_residual_action = residual_action_buff.buffer.flatten()
                     residual_actor_obs = np.concatenate([
                         obs_omega,
                         obs_gravity_orientation,
@@ -312,8 +317,14 @@ if __name__ == "__main__":
                     object_pos = apriltag_detector.get_object_obs()
                     object_pos = np.clip(object_pos, -100, 100)
                     object_tensor = torch.from_numpy(object_pos).float().unsqueeze(0)
+
+                    object_gravity = obj_gravity_orientation_buff.buffer
+                    object_gravity = np.clip(object_gravity, -100, 100)
+                    object_gravity_tensor = torch.from_numpy(object_gravity).float().unsqueeze(0)
+
+                    object_obs = torch.cat([object_tensor, object_gravity_tensor], axis=-1)
                     # residual action
-                    residual_action = policy_runner.act_residual(residual_obs_tensor, object_tensor).detach().numpy().squeeze()
+                    residual_action = policy_runner.act_residual(residual_obs_tensor, object_obs).detach().numpy().squeeze()
                     residual_action = np.clip(residual_action, -100, 100)
                 else:
                     residual_action = np.zeros(num_actions, dtype=np.float32)

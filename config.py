@@ -70,3 +70,9 @@ class Config:
             self.vel_y_cmd = config['vel_y_cmd']
             self.yaw_cmd = config['yaw_cmd']
 
+            # joint limit
+            self.upper_body_limit_lower = config['upper_body_joint_limits_lower']
+            self.upper_body_limit_upper = config['upper_body_joint_limits_upper']
+            self.lower_body_limit_lower = config['lower_body_joint_limits_lower']
+            self.lower_body_limit_upper = config['lower_body_joint_limits_upper']
+

@@ -13,7 +13,7 @@ torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
 import yaml
 from collections import deque
-from common.rotation_helper import transform_imu_data_pelvis_to_torso, is_object_bad_orientation, is_torso_bad_orientation
+from common.rotation_helper import transform_imu_data_pelvis_to_torso, is_object_bad_orientation, is_torso_bad_orientation, get_object_gravity_orientation
 from policy.policy_runner import ResidualPolicyRunner
 from config import CONFIG_PATH
 from common.circular_buffer import CircularBuffer
@@ -28,6 +28,7 @@ LOAD_RESIDUAL = True
 ENCODER_HISTORY_STEP = 32
 POSE_TYPE = '6d'
 ACTUATOR_CONFIG = 'mimic'
+INCLUDE_OBJECT_GRAVITY_ORIENTATION = False
 
 def get_gravity_orientation(quaternion):
     qw = quaternion[0]
@@ -46,6 +47,32 @@ def get_gravity_orientation(quaternion):
 def pd_control(target_q, q, kp, target_dq, dq, kd):
     """Calculates torques from position commands"""
     return (target_q - q) * kp + (target_dq - dq) * kd
+
+
+def compute_soft_limit(lower_limit, upper_limit, soft_factor=0.9):
+    center = (upper_limit + lower_limit) / 2.0
+    half_range = (upper_limit - lower_limit) / 2.0
+    soft_lower = center - half_range * soft_factor
+    soft_upper = center + half_range * soft_factor
+    return (soft_lower, soft_upper) 
+
+def check_joint_limit(action, soft_limit):
+    lower_violations = action < soft_limit[0]
+    upper_violations = action > soft_limit[1]
+    
+    within_limit = np.all((action >= soft_limit[0]) & (action <= soft_limit[1]))
+    if not within_limit:
+        violated_indices = np.where(lower_violations | upper_violations)[0]
+        
+        print(f"Joint limit violations detected:")
+        for idx in violated_indices:
+            if lower_violations[idx]:
+                print(f"  Joint {idx}: {action[idx]:.4f} < lower_limit {soft_limit[0][idx]:.4f} "
+                      f"(violation: {action[idx] - soft_limit[0][idx]:.4f})")
+            if upper_violations[idx]:
+                print(f"  Joint {idx}: {action[idx]:.4f} > upper_limit {soft_limit[1][idx]:.4f} "
+                      f"(violation: {action[idx] - soft_limit[1][idx]:.4f})")
+    return within_limit 
 
 def apply_action(
     num_actions,
@@ -178,6 +205,19 @@ if __name__ == "__main__":
         num_upper_actions=14
         num_lower_actions=15
 
+        # joint limit 
+        upper_body_limit_lower = np.asarray(config["upper_body_limit_lower"])
+        upper_body_limit_upper = np.asarray(config["upper_body_limit_upper"])
+        lower_body_limit_lower = np.asarray(config["lower_body_limit_lower"])
+        lower_body_limit_upper = np.asarray(config["lower_body_limit_upper"])
+
+        upper_body_soft_limit = compute_soft_limit(
+            upper_body_limit_lower, upper_body_limit_upper, soft_factor=1.6
+        )
+        lower_body_soft_limit = compute_soft_limit(
+            lower_body_limit_lower, lower_body_limit_upper, soft_factor=1.6
+        )
+
         default_angles = np.array(whole_body_default_pos, dtype=np.float32)
 
         ang_vel_scale = config["ang_vel_scale"]
@@ -210,6 +250,7 @@ if __name__ == "__main__":
     action_buff = CircularBuffer(max_len=5, data_shape=(num_actions,))
     object_pos_dim = 7 if POSE_TYPE == 'quat' else 9
     object_pos_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(object_pos_dim,))
+    object_gravity_orientation_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(3,))
 
     counter = 0
 
@@ -326,9 +367,21 @@ if __name__ == "__main__":
                     quat = d.qpos[3:7]
                     omega = d.qvel[3:6]
 
+                    """"
+                    Object Observation
+                    """
+                    # object camera pos
                     camera_frame_pos, camera_frame_orientation, camera_frame_quat = get_camera_frame_pos(d, m, POSE_TYPE)
                     camera_frame_obs = np.concatenate([camera_frame_pos, camera_frame_orientation], axis=0)
                     object_pos_buff.append(camera_frame_obs.copy())
+                    # object gravity orientation
+                    waist_yaw = d.qpos[7 + 12]
+                    waist_roll = d.qpos[7 + 13]
+                    waist_pitch = d.qpos[7 + 14]
+                    waist_euler_xyz = np.array([waist_roll, waist_pitch, waist_yaw])
+                    pelvis_quat = d.qpos[3:7]
+                    object_gravity_orientation = get_object_gravity_orientation(camera_frame_quat, waist_euler_xyz, pelvis_quat)
+                    object_gravity_orientation_buff.append(object_gravity_orientation.copy())
 
                     qj = (qj - default_angles) * dof_pos_scale
                     dqj = dqj * dof_vel_scale
@@ -355,12 +408,12 @@ if __name__ == "__main__":
                     gravity_orientation_buff.append(gravity_orientation.copy())
                     angular_velocity_buff.append(omega.copy())
 
-                    obs_omega = angular_velocity_buff.get_history(5).flatten()
-                    obs_gravity_orientation = gravity_orientation_buff.get_history(5).flatten()
-                    obs_cmd = vel_command_buff.get_history(5).flatten()
-                    obs_pos = joint_pos_buff.get_history(5).flatten()
-                    obs_vel = joint_vel_buff.get_history(5).flatten()
-                    obs_action = action_buff.get_history(5).flatten()
+                    obs_omega = angular_velocity_buff.buffer.flatten()
+                    obs_gravity_orientation = gravity_orientation_buff.buffer.flatten()
+                    obs_cmd = vel_command_buff.buffer.flatten()
+                    obs_pos = joint_pos_buff.buffer.flatten()
+                    obs_vel = joint_vel_buff.buffer.flatten()
+                    obs_action = action_buff.buffer.flatten()
                     
                     big_group_major = np.concatenate([
                         obs_omega,
@@ -383,19 +436,19 @@ if __name__ == "__main__":
                         waist_pitch = d.qpos[7 + 14]
                         waist_euler_xyz = np.array([waist_roll, waist_pitch, waist_yaw])
                         pelvis_quat = d.qpos[3:7]
-                        torso_bad = is_torso_bad_orientation(waist_euler_xyz, pelvis_quat, 5)
+                        torso_bad = is_torso_bad_orientation(waist_euler_xyz, pelvis_quat, 10)
                         if torso_bad:
-                            use_residual_this_step = False
+                            #use_residual_this_step = False
                             print(f"[WARNING] TORSO BAD - Residual DISABLED")
                         
                         object_bad = is_object_bad_orientation(waist_euler_xyz, pelvis_quat, camera_frame_quat, 30)
                         if object_bad:
-                            use_residual_this_step = False
+                            #use_residual_this_step = False
                             print(f"[WARNING] OBJECT BAD - Residual DISABLED")
 
 
                     if use_residual_this_step:
-                        obs_residual_action = residual_action_buff.get_history(5).flatten()
+                        obs_residual_action = residual_action_buff.buffer.flatten()
                         residual_actor_obs = np.concatenate([
                             obs_omega,
                             obs_gravity_orientation,
@@ -407,9 +460,16 @@ if __name__ == "__main__":
                         residual_actor_obs = np.clip(residual_actor_obs, -100, 100)
                         residual_obs_tensor = torch.from_numpy(residual_actor_obs).float().unsqueeze(0)
                         
-                        object_pos = object_pos_buff.get_history(ENCODER_HISTORY_STEP)
+                        object_pos = object_pos_buff.buffer
                         object_pos = np.clip(object_pos, -100, 100)
-                        object_tensor = torch.from_numpy(object_pos).float().unsqueeze(0)
+                        object_gravity_orientation = object_gravity_orientation_buff.buffer
+                        object_gravity_orientation = np.clip(object_gravity_orientation, -100, 100)
+                        object_pos_tensor = torch.from_numpy(object_pos).float().unsqueeze(0)
+                        if INCLUDE_OBJECT_GRAVITY_ORIENTATION:
+                            object_gravity_orientation_tensor = torch.from_numpy(object_gravity_orientation).float().unsqueeze(0)
+                            object_tensor = torch.cat([object_pos_tensor, object_gravity_orientation_tensor], axis=-1)
+                        else:
+                            object_tensor = object_pos_tensor
                         # residual action
                         residual_action = policy_runner.act_residual(residual_obs_tensor, object_tensor).detach().numpy().squeeze()
                         residual_action = np.clip(residual_action, -100, 100)
@@ -425,6 +485,15 @@ if __name__ == "__main__":
 
                     target_lower_pos = lower_action * lower_body_action_scale + lower_body_default_pos
                     target_upper_pos = upper_action * upper_body_action_scale + upper_body_default_pos
+
+                    # check joint limit
+                    in_upper_limit = check_joint_limit(target_upper_pos, upper_body_soft_limit)
+                    in_lower_limit = check_joint_limit(target_lower_pos[:11], (lower_body_soft_limit[0][:11],lower_body_soft_limit[1][:11]))
+
+                    if not in_upper_limit or not in_lower_limit:
+                        target_upper_pos = upper_body_default_pos.copy()
+                        target_lower_pos = lower_body_default_pos.copy()
+
                     
 
                 # Pick up changes to the physics state, apply perturbations, update options from GUI.

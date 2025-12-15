@@ -29,14 +29,16 @@ class AprilTagDetector:
     """
     
     def __init__(self, 
-                 tag_size: float = 71.12 / 1000,
+                 tag_size: float = 49.5 / 1000,
+                 #tag_size: float = 71.12 / 1000,
                  families: str = "tag25h9",
                  tag_id: int = 0,
                  resolution: Tuple[int, int] = (640, 480),
                  fps: int = 30,
                  coordinate_transform: bool = True,
                  history_length: int = 5,
-                 pose_type: str = 'quat'
+                 pose_type: str = 'quat',
+                 record_quat = True
                  ):
         """
         Args:
@@ -52,6 +54,7 @@ class AprilTagDetector:
         self.resolution = resolution
         self.fps = fps
         self.coordinate_transform = coordinate_transform
+        self.record_quat = record_quat
         
         # RealSense pipeline
         self.pipeline = None
@@ -87,10 +90,13 @@ class AprilTagDetector:
             data_shape = 7
 
         self.object_pose_buff = CircularBuffer(max_len=history_length, data_shape=(data_shape,))
-        self.default_pose = np.zeros(data_shape)
-        self.current_pos = np.zeros(data_shape)
+        if self.record_quat:
+            self.object_quat_buff = CircularBuffer(max_len=history_length, data_shape=(4,))
+        else:
+            self.object_quat_buff = None
+        
         self.prev_pos = np.zeros(data_shape)
-        self.last_object_quat = np.zeros(4)
+        self.prev_quat = np.array([1,0,0,0])
 
         # transform
         self.transform = np.eye(4,4)
@@ -193,7 +199,7 @@ class AprilTagDetector:
                 
                 # Detect AprilTags
                 detections = self.detector.detect(gray_image)
-                
+
                 # Look for target tag
                 target_detected = False
                 for detection in detections:
@@ -204,8 +210,10 @@ class AprilTagDetector:
                             # Add to buffer (thread-safe)
                             with self.detection_lock:
                                 self.prev_pos = pose_7d.copy()
+                                self.prev_quat = object_quat.copy()
                                 self.object_pose_buff.append(pose_7d)
-                                self.last_object_quat = object_quat
+                                if self.record_quat:
+                                    self.object_quat_buff.append(object_quat)
                             
                             target_detected = True
                             break  # Found target, no need to check other detections
@@ -214,11 +222,12 @@ class AprilTagDetector:
                             print(f"Error processing tag {detection.tag_id}: {e}")
                             continue
                 
-                # If target tag not detected, add default pose (zeros + identity quaternion)
+                # if not detected use last detection
                 if not target_detected:
                     with self.detection_lock:
-                        #self.object_pose_buff.append(self.default_pose)
                         self.object_pose_buff.append(self.prev_pos)
+                        if self.record_quat:
+                            self.object_quat_buff.append(self.prev_quat)
                        
             except Exception as e:
                 print(f"Error in detection loop: {e}")
@@ -259,20 +268,36 @@ class AprilTagDetector:
             Each 7D element is [x, y, z, qw, qx, qy, qz]
         """
         with self.detection_lock:
-            obs = self.object_pose_buff.get_history(self.history_length)
+            obs = self.object_pose_buff.buffer
         
         return obs
     
-
-    def get_last_obs(self) -> np.ndarray:
-
+    def get_object_quat(self) -> np.ndarray:
+        """
+        Get latest object observations as flattened array
+        
+        Returns:
+            Flattened array of shape (history_length * 7,) containing pose history
+            Each 7D element is [x, y, z, qw, qx, qy, qz]
+        """
+        if not self.record_quat or self.object_quat_buff is None:
+            raise RuntimeError("Quat recording is disabled. Set record_quat=True")
         with self.detection_lock:
-            obs = self.object_pose_buff.get_history(1)
+            obs = self.object_quat_buff.buffer
+        
         return obs
     
-    def get_last_quat(self) -> np.ndarray:
+    def get_last_obj_pose(self)-> np.ndarray:
         with self.detection_lock:
-            obs = self.last_object_quat
+            obs = self.object_pose_buff[0]
+        return obs
+    
+    
+    def get_last_quat(self) -> np.ndarray:
+        if not self.record_quat or self.object_quat_buff is None:
+            raise RuntimeError("Quat recording is disabled. Set record_quat=True")
+        with self.detection_lock:
+            obs = self.object_quat_buff[0]
         return obs
     
     def is_running(self) -> bool:
@@ -287,6 +312,14 @@ class AprilTagDetector:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager support"""
         self.stop()
+
+    def reset(self):
+        """Reset buffers"""
+        with self.detection_lock:
+            self.object_pose_buff.reset()
+            if self.record_quat and self.object_quat_buff is not None:
+                self.object_quat_buff.reset()
+        
 
 
 

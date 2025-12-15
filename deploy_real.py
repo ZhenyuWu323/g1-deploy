@@ -21,12 +21,13 @@ from unitree_sdk2py.utils.crc import CRC
 
 from common.command_helper import create_damping_cmd, create_zero_cmd, init_cmd_hg, init_cmd_go, MotorMode
 from common.rotation_helper import get_gravity_orientation, transform_imu_data, is_object_bad_orientation, is_torso_bad_orientation
+from common.rotation_helper import get_object_gravity_orientation
 from common.remote_controller import RemoteController, KeyMap
 from config import Config
 from policy.policy_runner import ResidualPolicyRunner
 from common.circular_buffer import CircularBuffer
 from apriltag_camera import AprilTagDetector
-LOAD_RESIDUAL=True
+LOAD_RESIDUAL=False
 USE_RESIDUAL=False
 ENCODER_HISTORY_STEP = 32
 POSE_TYPE = '6d'
@@ -43,6 +44,7 @@ class Controller:
         # Initialize the policy network
         self.policy_runner = ResidualPolicyRunner(use_residual=load_residual)
         self.use_residual = use_residual
+        self.load_residual = load_residual
 
         # Initialize camera
         self.apriltag_detector = None
@@ -73,6 +75,25 @@ class Controller:
         self.projected_gravity_buff = CircularBuffer(max_len=config.history_length, data_shape=(3,))
         self.vel_command_buff = CircularBuffer(max_len=config.history_length, data_shape=(3,))
         self.residual_action_buff = CircularBuffer(max_len=config.history_length, data_shape=(config.num_actions,))
+        self.object_projected_gravity_buff = None
+        if load_residual:
+            self.object_projected_gravity_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(3,))
+        
+
+        # joint limits
+        self.upper_body_limit_lower = np.asarray(config.upper_body_limit_lower)
+        self.upper_body_limit_upper = np.asarray(config.upper_body_limit_upper)
+        self.lower_body_limit_lower = np.asarray(config.lower_body_limit_lower)
+        self.lower_body_limit_upper = np.asarray(config.lower_body_limit_upper)
+
+        # soft limits
+        self.upper_body_soft_limit = self.compute_soft_limit(
+            self.upper_body_limit_lower, self.upper_body_limit_upper, soft_factor=1.0
+        )
+        
+        self.lower_body_soft_limit = self.compute_soft_limit(
+            self.lower_body_limit_lower, self.lower_body_limit_upper, soft_factor=1.0
+        )
 
         if config.msg_type == "hg":
             # g1 and h1_2 use the hg msg type
@@ -203,6 +224,18 @@ class Controller:
         # command
         cmd = self.cmd 
 
+        # object projected gravity
+        if self.load_residual:
+            waist_yaw = self.low_state.motor_state[12].q
+            waist_roll = self.low_state.motor_state[13].q
+            waist_pitch = self.low_state.motor_state[14].q
+            waist_euler_xyz = np.array([waist_roll, waist_pitch, waist_yaw])
+            pelvis_quat = self.low_state.imu_state.quaternion
+            object_camera_quat = self.apriltag_detector.get_last_quat()
+            object_proj_gravity = get_object_gravity_orientation(object_camera_quat, waist_euler_xyz, pelvis_quat)
+            self.object_projected_gravity_buff.append(object_proj_gravity)
+
+
         # add to history
         self.joint_pos_buff.append(q_t)
         self.joint_vel_buff.append(dq_t)
@@ -246,20 +279,32 @@ class Controller:
         elif analog_value > 0:
             return max_value     
         else:
-            return min_value   
+            return min_value
 
+    def compute_soft_limit(self, lower_limit, upper_limit, soft_factor=0.9):
+        center = (upper_limit + lower_limit) / 2.0
+        half_range = (upper_limit - lower_limit) / 2.0
+        soft_lower = center - half_range * soft_factor
+        soft_upper = center + half_range * soft_factor
+        return (soft_lower, soft_upper)   
+
+    def check_joint_limit(self, action, soft_limit):
+
+        with_in_limit = np.all((action >= soft_limit[0]) & (action <= soft_limit[1]))
+        return with_in_limit
+    
     def run(self):
         start_time = time.time()
         self.counter += 1
         # get obs
         self.get_obs()
-        joint_pos = self.joint_pos_buff.get_history(self.config.history_length).flatten()
-        joint_vel = self.joint_vel_buff.get_history(self.config.history_length).flatten()
-        ang_vel = self.ang_vel_buff.get_history(self.config.history_length).flatten()
-        projected_gravity = self.projected_gravity_buff.get_history(self.config.history_length).flatten()
-        actions = self.action_buff.get_history(self.config.history_length).flatten()
-        vel_command = self.vel_command_buff.get_history(self.config.history_length).flatten()
-        residual_actions = self.residual_action_buff.get_history(self.config.history_length).flatten()
+        joint_pos = self.joint_pos_buff.buffer.flatten()
+        joint_vel = self.joint_vel_buff.buffer.flatten()
+        ang_vel = self.ang_vel_buff.buffer.flatten()
+        projected_gravity = self.projected_gravity_buff.buffer.flatten()
+        actions = self.action_buff.buffer.flatten()
+        vel_command = self.vel_command_buff.buffer.flatten()
+        residual_actions = self.residual_action_buff.buffer.flatten()
         
         self.cmd[0] = self.to_cmd_fixed_value(self.remote_controller.ly, 0.1, self.config.vel_x_cmd[1], self.config.vel_x_cmd[0])
         self.cmd[1] = self.to_cmd_fixed_value(self.remote_controller.lx * -1, 0.1, self.config.vel_y_cmd[1], self.config.vel_y_cmd[0])
@@ -310,9 +355,16 @@ class Controller:
 
         if use_residual_this_step:
             # get camera obs
-            object_obs = self.apriltag_detector.get_object_obs()
-            object_obs = np.clip(object_obs, -100, 100)
-            object_obs_tensor = torch.from_numpy(object_obs).float().unsqueeze(0)
+            object_pos_obs = self.apriltag_detector.get_object_obs()
+            object_pos_obs = np.clip(object_pos_obs, -100, 100)
+            object_pos_obs_tensor = torch.from_numpy(object_pos_obs).float().unsqueeze(0)
+
+            # get object projected gravity
+            object_projected_gravity = self.object_projected_gravity_buff.buffer
+            object_projected_gravity = np.clip(object_projected_gravity, -100, 100)
+            object_projected_gravity_tensor = torch.from_numpy(object_projected_gravity).float().unsqueeze(0)
+            # concat
+            object_obs_tensor = torch.cat([object_pos_obs_tensor, object_projected_gravity_tensor], axis=-1)
 
             # get residual actor obs
             self.residual_obs = np.concatenate([base_obs, residual_actions])
@@ -331,6 +383,17 @@ class Controller:
         lower_body_actions = final_action[self.config.num_upper_actions:]
         lower_body_target = self.config.lower_body_default_pos + lower_body_actions * self.config.lower_body_action_scale
         
+
+        # check joint limit
+        is_in_upper_limit = self.check_joint_limit(upper_body_target, self.upper_body_soft_limit)
+        if not is_in_upper_limit:
+            return 0 #TODO: modify this
+        
+        is_in_lower_limit = self.check_joint_limit(lower_body_target, self.lower_body_soft_limit)
+        if not is_in_lower_limit:
+            return 0 #TODO: modify this
+
+
         # Build low cmd
 
         # Upper body
@@ -400,12 +463,13 @@ if __name__ == "__main__":
             controller.run()
             # Press the select key to exit
             if controller.remote_controller.button[KeyMap.select] == 1:
+                print("Killed By SELECTED")
                 break
         except KeyboardInterrupt:
             break
     # Enter the damping state
-    if LOAD_RESIDUAL:
-        controller.apriltag_detector.stop()
     create_damping_cmd(controller.low_cmd)
     controller.send_cmd(controller.low_cmd)
+    if LOAD_RESIDUAL:
+        controller.apriltag_detector.stop()
     print("Exit")
