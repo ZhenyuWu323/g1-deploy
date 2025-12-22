@@ -110,6 +110,12 @@ if __name__ == "__main__":
     action_buff = CircularBuffer(max_len=5, data_shape=(num_actions,))
     obj_gravity_orientation_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(3,))
 
+    encoder_residual_action_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(num_actions,))
+    encoder_joint_pos_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(num_actions,))
+    encoder_joint_vel_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(num_actions,))
+    encoder_gravity_orientation_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(3,))
+    encoder_angular_velocity_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(3,))
+
     counter = 0
 
     # Load robot model
@@ -146,6 +152,12 @@ if __name__ == "__main__":
         vel_command_buff.append(np.zeros(3, dtype=np.float32))
         gravity_orientation_buff.append(np.zeros(3, dtype=np.float32))
         angular_velocity_buff.append(np.zeros(3, dtype=np.float32))
+
+        encoder_angular_velocity_buff.append(np.zeros(3, dtype=np.float32))
+        encoder_gravity_orientation_buff.append(np.zeros(3, dtype=np.float32))
+        encoder_joint_pos_buff.append(np.zeros(num_actions, dtype=np.float32))
+        encoder_joint_vel_buff.append(np.zeros(num_actions, dtype=np.float32))
+        encoder_residual_action_buff.append(residual_action.copy())
 
         frame_stack.append(obs.copy())
         mujoco.mj_step(m, d) 
@@ -259,6 +271,12 @@ if __name__ == "__main__":
                 gravity_orientation_buff.append(gravity_orientation.copy())
                 angular_velocity_buff.append(omega.copy())
 
+                encoder_angular_velocity_buff.append(omega.copy())
+                encoder_gravity_orientation_buff.append(gravity_orientation.copy())
+                encoder_joint_pos_buff.append(qj[xml_to_policy].copy())
+                encoder_joint_vel_buff.append(dqj[xml_to_policy].copy())
+                encoder_residual_action_buff.append(residual_action.copy())
+
                 obs_omega = angular_velocity_buff.buffer.flatten()
                 obs_gravity_orientation = gravity_orientation_buff.buffer.flatten()
                 obs_cmd = vel_command_buff.buffer.flatten()
@@ -313,6 +331,17 @@ if __name__ == "__main__":
                     ])
                     residual_actor_obs = np.clip(residual_actor_obs, -100, 100)
                     residual_obs_tensor = torch.from_numpy(residual_actor_obs).float().unsqueeze(0)
+
+                    # proprioceptive
+                    encoder_pro_obs = np.concatenate([
+                        encoder_angular_velocity_buff.buffer,
+                        encoder_gravity_orientation_buff.buffer,
+                        encoder_joint_pos_buff.buffer,
+                        encoder_joint_vel_buff.buffer,
+                        encoder_residual_action_buff.buffer
+                    ], axis=-1)
+                    encoder_pro_obs = np.clip(encoder_pro_obs, -100, 100)
+                    encoder_obs_tensor = torch.from_numpy(encoder_pro_obs).float().unsqueeze(0)
                     
                     object_pos = apriltag_detector.get_object_obs()
                     object_pos = np.clip(object_pos, -100, 100)
@@ -322,7 +351,8 @@ if __name__ == "__main__":
                     object_gravity = np.clip(object_gravity, -100, 100)
                     object_gravity_tensor = torch.from_numpy(object_gravity).float().unsqueeze(0)
 
-                    object_obs = torch.cat([object_tensor, object_gravity_tensor], axis=-1)
+                    #object_obs = torch.cat([object_tensor, object_gravity_tensor], axis=-1)
+                    object_obs = torch.cat([encoder_obs_tensor, object_tensor], axis=-1)
                     # residual action
                     residual_action = policy_runner.act_residual(residual_obs_tensor, object_obs).detach().numpy().squeeze()
                     residual_action = np.clip(residual_action, -100, 100)

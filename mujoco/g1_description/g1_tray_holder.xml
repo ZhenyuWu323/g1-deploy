@@ -465,7 +465,7 @@
   <worldbody>
     <!-- Plate -->
     <body name="plate" pos="0.30225 0.0 0.93400">
-      <geom name="plate_geom" type="box" size="0.12 0.17 0.009" rgba="1 0 0 1" mass="0.5" class="contact"/> 
+      <geom name="plate_geom" type="box" size="0.12 0.17 0.004" rgba="1 0 0 1" mass="0.5" class="contact"/> 
       <freejoint/>
     </body>
     

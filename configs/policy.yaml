@@ -17,11 +17,11 @@ residual_whole_body_policy:
   body_key: residual_whole_body
   num_actions: 29
   num_actor_obs: 480
-  num_encoder_obs: 9
+  num_encoder_obs: 102
   num_time_steps: 32
   num_encoder_output: 32
   actor_hidden_dims: [512, 256, 128]
   encoder_d_model: 32
   encoder_nhead: 2
-  encoder_num_layers: 1
+  encoder_num_layers: 2
   activation: elu

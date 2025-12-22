@@ -29,6 +29,7 @@ ENCODER_HISTORY_STEP = 32
 POSE_TYPE = '6d'
 ACTUATOR_CONFIG = 'mimic'
 INCLUDE_OBJECT_GRAVITY_ORIENTATION = False
+INCLUDE_ROBOT_PROPRIOCEPTIVE = True
 
 def get_gravity_orientation(quaternion):
     qw = quaternion[0]
@@ -251,6 +252,11 @@ if __name__ == "__main__":
     object_pos_dim = 7 if POSE_TYPE == 'quat' else 9
     object_pos_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(object_pos_dim,))
     object_gravity_orientation_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(3,))
+    encoder_residual_action_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(num_actions,))
+    encoder_gravity_orientation_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(3,))
+    encoder_joint_pos_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(num_actions,))
+    encoder_joint_vel_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(num_actions,))
+    encoder_angular_velocity_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(3,))
 
     counter = 0
 
@@ -288,6 +294,12 @@ if __name__ == "__main__":
         gravity_orientation_buff.append(np.zeros(3, dtype=np.float32))
         angular_velocity_buff.append(np.zeros(3, dtype=np.float32))
         object_pos_buff.append(np.zeros(object_pos_dim, dtype=np.float32))
+
+        encoder_gravity_orientation_buff.append(np.zeros(3, dtype=np.float32))
+        encoder_joint_pos_buff.append(np.zeros(num_actions, dtype=np.float32))
+        encoder_joint_vel_buff.append(np.zeros(num_actions, dtype=np.float32))
+        encoder_angular_velocity_buff.append(np.zeros(3, dtype=np.float32))
+        encoder_residual_action_buff.append(residual_action.copy())
 
         frame_stack.append(obs.copy())
         mujoco.mj_step(m, d) 
@@ -408,6 +420,12 @@ if __name__ == "__main__":
                     gravity_orientation_buff.append(gravity_orientation.copy())
                     angular_velocity_buff.append(omega.copy())
 
+                    encoder_gravity_orientation_buff.append(gravity_orientation.copy())
+                    encoder_joint_pos_buff.append(qj[xml_to_policy].copy())
+                    encoder_joint_vel_buff.append(dqj[xml_to_policy].copy())
+                    encoder_angular_velocity_buff.append(omega.copy())
+                    encoder_residual_action_buff.append(residual_action.copy())
+
                     obs_omega = angular_velocity_buff.buffer.flatten()
                     obs_gravity_orientation = gravity_orientation_buff.buffer.flatten()
                     obs_cmd = vel_command_buff.buffer.flatten()
@@ -459,6 +477,17 @@ if __name__ == "__main__":
                         ])
                         residual_actor_obs = np.clip(residual_actor_obs, -100, 100)
                         residual_obs_tensor = torch.from_numpy(residual_actor_obs).float().unsqueeze(0)
+
+
+                        residual_proprioceptive_obs = np.concatenate([
+                            encoder_angular_velocity_buff.buffer,
+                            encoder_gravity_orientation_buff.buffer,
+                            encoder_joint_pos_buff.buffer,
+                            encoder_joint_vel_buff.buffer,
+                            encoder_residual_action_buff.buffer,
+                        ], axis=1)
+                        residual_proprioceptive_obs = np.clip(residual_proprioceptive_obs, -100, 100)
+                        residual_proprioceptive_obs_tensor = torch.from_numpy(residual_proprioceptive_obs).float().unsqueeze(0)
                         
                         object_pos = object_pos_buff.buffer
                         object_pos = np.clip(object_pos, -100, 100)
@@ -470,6 +499,13 @@ if __name__ == "__main__":
                             object_tensor = torch.cat([object_pos_tensor, object_gravity_orientation_tensor], axis=-1)
                         else:
                             object_tensor = object_pos_tensor
+
+                        if INCLUDE_ROBOT_PROPRIOCEPTIVE:
+                            object_tensor = torch.cat([residual_proprioceptive_obs_tensor, object_tensor], axis=-1)
+                            
+                            #object_tensor = torch.cat([object_tensor, residual_proprioceptive_obs_tensor], axis=-1)
+    
+
                         # residual action
                         residual_action = policy_runner.act_residual(residual_obs_tensor, object_tensor).detach().numpy().squeeze()
                         residual_action = np.clip(residual_action, -100, 100)

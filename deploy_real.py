@@ -27,9 +27,10 @@ from config import Config
 from policy.policy_runner import ResidualPolicyRunner
 from common.circular_buffer import CircularBuffer
 from apriltag_camera import AprilTagDetector
-LOAD_RESIDUAL=False
+LOAD_RESIDUAL=True
 USE_RESIDUAL=False
 ENCODER_HISTORY_STEP = 32
+SOFT_LIMIT_FACTOR = 1.7
 POSE_TYPE = '6d'
 ACTUATOR_CONFIG = 'mimic'
 
@@ -76,8 +77,18 @@ class Controller:
         self.vel_command_buff = CircularBuffer(max_len=config.history_length, data_shape=(3,))
         self.residual_action_buff = CircularBuffer(max_len=config.history_length, data_shape=(config.num_actions,))
         self.object_projected_gravity_buff = None
+        self.encoder_residual_action_buff = None
+        self.encoder_joint_pos_buff = None
+        self.encoder_joint_vel_buff = None
+        self.encoder_gravity_orientation_buff = None
+        self.encoder_angular_velocity_buff = None
         if load_residual:
-            self.object_projected_gravity_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(3,))
+            #self.object_projected_gravity_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(3,))
+            self.encoder_angular_velocity_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(3,))
+            self.encoder_gravity_orientation_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(3,))
+            self.encoder_joint_pos_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(config.num_actions,))
+            self.encoder_joint_vel_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(config.num_actions,))
+            self.encoder_residual_action_buff = CircularBuffer(max_len=ENCODER_HISTORY_STEP, data_shape=(config.num_actions,))
         
 
         # joint limits
@@ -88,11 +99,11 @@ class Controller:
 
         # soft limits
         self.upper_body_soft_limit = self.compute_soft_limit(
-            self.upper_body_limit_lower, self.upper_body_limit_upper, soft_factor=1.0
+            self.upper_body_limit_lower, self.upper_body_limit_upper, soft_factor=SOFT_LIMIT_FACTOR
         )
         
         self.lower_body_soft_limit = self.compute_soft_limit(
-            self.lower_body_limit_lower, self.lower_body_limit_upper, soft_factor=1.0
+            self.lower_body_limit_lower, self.lower_body_limit_upper, soft_factor=SOFT_LIMIT_FACTOR
         )
 
         if config.msg_type == "hg":
@@ -226,14 +237,20 @@ class Controller:
 
         # object projected gravity
         if self.load_residual:
-            waist_yaw = self.low_state.motor_state[12].q
-            waist_roll = self.low_state.motor_state[13].q
-            waist_pitch = self.low_state.motor_state[14].q
-            waist_euler_xyz = np.array([waist_roll, waist_pitch, waist_yaw])
-            pelvis_quat = self.low_state.imu_state.quaternion
-            object_camera_quat = self.apriltag_detector.get_last_quat()
-            object_proj_gravity = get_object_gravity_orientation(object_camera_quat, waist_euler_xyz, pelvis_quat)
-            self.object_projected_gravity_buff.append(object_proj_gravity)
+            # waist_yaw = self.low_state.motor_state[12].q
+            # waist_roll = self.low_state.motor_state[13].q
+            # waist_pitch = self.low_state.motor_state[14].q
+            # waist_euler_xyz = np.array([waist_roll, waist_pitch, waist_yaw])
+            # pelvis_quat = self.low_state.imu_state.quaternion
+            # object_camera_quat = self.apriltag_detector.get_last_quat()
+            # object_proj_gravity = get_object_gravity_orientation(object_camera_quat, waist_euler_xyz, pelvis_quat)
+            # self.object_projected_gravity_buff.append(object_proj_gravity)
+
+            self.encoder_angular_velocity_buff.append(ang_vel)
+            self.encoder_gravity_orientation_buff.append(gravity_orientation)
+            self.encoder_joint_pos_buff.append(q_t)
+            self.encoder_joint_vel_buff.append(dq_t)
+            self.encoder_residual_action_buff.append(self.residual_action.copy())
 
 
         # add to history
@@ -289,9 +306,22 @@ class Controller:
         return (soft_lower, soft_upper)   
 
     def check_joint_limit(self, action, soft_limit):
-
-        with_in_limit = np.all((action >= soft_limit[0]) & (action <= soft_limit[1]))
-        return with_in_limit
+        lower_violations = action < soft_limit[0]
+        upper_violations = action > soft_limit[1]
+        
+        within_limit = np.all((action >= soft_limit[0]) & (action <= soft_limit[1]))
+        if not within_limit:
+            violated_indices = np.where(lower_violations | upper_violations)[0]
+            
+            print(f"Joint limit violations detected:")
+            for idx in violated_indices:
+                if lower_violations[idx]:
+                    print(f"  Joint {idx}: {action[idx]:.4f} < lower_limit {soft_limit[0][idx]:.4f} "
+                        f"(violation: {action[idx] - soft_limit[0][idx]:.4f})")
+                if upper_violations[idx]:
+                    print(f"  Joint {idx}: {action[idx]:.4f} > upper_limit {soft_limit[1][idx]:.4f} "
+                        f"(violation: {action[idx] - soft_limit[1][idx]:.4f})")
+        return within_limit 
     
     def run(self):
         start_time = time.time()
@@ -360,11 +390,23 @@ class Controller:
             object_pos_obs_tensor = torch.from_numpy(object_pos_obs).float().unsqueeze(0)
 
             # get object projected gravity
-            object_projected_gravity = self.object_projected_gravity_buff.buffer
-            object_projected_gravity = np.clip(object_projected_gravity, -100, 100)
-            object_projected_gravity_tensor = torch.from_numpy(object_projected_gravity).float().unsqueeze(0)
+            # object_projected_gravity = self.object_projected_gravity_buff.buffer
+            # object_projected_gravity = np.clip(object_projected_gravity, -100, 100)
+            # object_projected_gravity_tensor = torch.from_numpy(object_projected_gravity).float().unsqueeze(0)
+
+            # get robot proprioceptive encoder obs
+            encoder_proprio_obs = np.concatenate([
+                self.encoder_angular_velocity_buff.buffer,
+                self.encoder_gravity_orientation_buff.buffer,
+                self.encoder_joint_pos_buff.buffer,
+                self.encoder_joint_vel_buff.buffer,
+                self.encoder_residual_action_buff.buffer,
+            ], axis=-1)
+            encoder_proprio_obs = np.clip(encoder_proprio_obs, -100, 100)
+            encoder_obs_tensor = torch.from_numpy(encoder_proprio_obs).float().unsqueeze(0)
             # concat
-            object_obs_tensor = torch.cat([object_pos_obs_tensor, object_projected_gravity_tensor], axis=-1)
+            #object_obs_tensor = torch.cat([object_pos_obs_tensor, object_projected_gravity_tensor], axis=-1)
+            object_obs_tensor = torch.cat([encoder_obs_tensor, object_pos_obs_tensor], axis=-1)
 
             # get residual actor obs
             self.residual_obs = np.concatenate([base_obs, residual_actions])
@@ -385,13 +427,12 @@ class Controller:
         
 
         # check joint limit
-        is_in_upper_limit = self.check_joint_limit(upper_body_target, self.upper_body_soft_limit)
-        if not is_in_upper_limit:
-            return 0 #TODO: modify this
-        
-        is_in_lower_limit = self.check_joint_limit(lower_body_target, self.lower_body_soft_limit)
-        if not is_in_lower_limit:
-            return 0 #TODO: modify this
+        in_upper_limit = self.check_joint_limit(upper_body_target, self.upper_body_soft_limit)
+        in_lower_limit = self.check_joint_limit(lower_body_target[:11], (self.lower_body_soft_limit[0][:11],self.lower_body_soft_limit[1][:11]))
+
+        if not in_upper_limit or not in_lower_limit:
+            print(f"[WARNING] JOINT LIMIT VIOLATION - SKIPPING COMMAND")
+            return 0 # Skip sending command if joint limits are violated
 
 
         # Build low cmd
@@ -421,6 +462,8 @@ class Controller:
             print('[WARNING] control over time')
         else:
             time.sleep(time_til_next_step)
+
+        return 1
 
 
 
@@ -460,9 +503,9 @@ if __name__ == "__main__":
                 print(f"\n{'='*50}")
                 print(f"Residual Policy: {status}")
                 print(f"{'='*50}\n")
-            controller.run()
+            run = controller.run()
             # Press the select key to exit
-            if controller.remote_controller.button[KeyMap.select] == 1:
+            if controller.remote_controller.button[KeyMap.select] == 1 or run == 0:
                 print("Killed By SELECTED")
                 break
         except KeyboardInterrupt:
