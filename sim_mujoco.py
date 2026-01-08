@@ -30,6 +30,7 @@ POSE_TYPE = '6d'
 ACTUATOR_CONFIG = 'mimic'
 INCLUDE_OBJECT_GRAVITY_ORIENTATION = False
 INCLUDE_ROBOT_PROPRIOCEPTIVE = True
+OBJECT_POSITION_TOP = True
 
 def get_gravity_orientation(quaternion):
     qw = quaternion[0]
@@ -115,7 +116,7 @@ def apply_action(
     return tau
 
 
-def get_camera_frame_pos(data, model, orientation_type='quat'):
+def get_camera_frame_pos(data, model, orientation_type='quat', object_z_offset=0.0):
     cam_site_id = model.site("d435_camera_frame").id
     cam_pos_world = data.site_xpos[cam_site_id]
     cam_rot_world = data.site_xmat[cam_site_id].reshape(3, 3)
@@ -139,6 +140,12 @@ def get_camera_frame_pos(data, model, orientation_type='quat'):
     object_camera_orientation = None
     object_camera_quat = object_camera_rotation.as_quat()
     object_camera_quat = np.array([object_camera_quat[3], object_camera_quat[0], object_camera_quat[1], object_camera_quat[2]])
+
+    if object_z_offset > 0:
+        object_offset = np.array([0, 0, object_z_offset])
+        object_camera_offset = quat_apply(object_camera_quat, object_offset)
+        object_camera_pos += object_camera_offset
+
 
     if orientation_type == 'quat':
         object_camera_orientation = object_camera_quat
@@ -265,6 +272,13 @@ if __name__ == "__main__":
     d = mujoco.MjData(m)
     m.opt.timestep = simulation_dt
 
+    cup_wall_geom_id = m.geom("cup_wall").id
+    cup_size = m.geom_size[cup_wall_geom_id]
+    CUP_RADIUS = cup_size[0]
+    CUP_HEIGHT = cup_size[1] * 2
+
+    print(f"Cup specs - Radius: {CUP_RADIUS}m, Height: {CUP_HEIGHT}m")
+
     policy_to_xml = []
     for i in range(1, m.njnt):
         jname = mujoco.mj_id2name(m, 3, i)
@@ -383,7 +397,7 @@ if __name__ == "__main__":
                     Object Observation
                     """
                     # object camera pos
-                    camera_frame_pos, camera_frame_orientation, camera_frame_quat = get_camera_frame_pos(d, m, POSE_TYPE)
+                    camera_frame_pos, camera_frame_orientation, camera_frame_quat = get_camera_frame_pos(d, m, POSE_TYPE, object_z_offset=0.0 if not OBJECT_POSITION_TOP else CUP_HEIGHT/2)
                     camera_frame_obs = np.concatenate([camera_frame_pos, camera_frame_orientation], axis=0)
                     object_pos_buff.append(camera_frame_obs.copy())
                     # object gravity orientation

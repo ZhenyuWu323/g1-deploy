@@ -29,9 +29,9 @@ class AprilTagDetector:
     """
     
     def __init__(self, 
-                 tag_size: float = 49.5 / 1000,
+                 tag_size: float = 50 / 1000,
                  #tag_size: float = 71.12 / 1000,
-                 families: str = "tag25h9",
+                 families: str = "tag16h5",
                  tag_id: int = 0,
                  resolution: Tuple[int, int] = (640, 480),
                  fps: int = 30,

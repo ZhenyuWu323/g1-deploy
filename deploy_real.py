@@ -30,7 +30,7 @@ from apriltag_camera import AprilTagDetector
 LOAD_RESIDUAL=True
 USE_RESIDUAL=False
 ENCODER_HISTORY_STEP = 32
-SOFT_LIMIT_FACTOR = 1.7
+SOFT_LIMIT_FACTOR = 1.8
 POSE_TYPE = '6d'
 ACTUATOR_CONFIG = 'mimic'
 
@@ -362,25 +362,25 @@ class Controller:
         Check for residual
         """
         use_residual_this_step = self.use_residual
-        if use_residual_this_step:
-            # check torso
-            waist_yaw = self.low_state.motor_state[12].q
-            waist_roll = self.low_state.motor_state[13].q
-            waist_pitch = self.low_state.motor_state[14].q
-            waist_euler_xyz = np.array([waist_roll, waist_pitch, waist_yaw])
-            pelvis_quat = self.low_state.imu_state.quaternion
-            torso_bad = is_torso_bad_orientation(waist_euler_xyz, pelvis_quat, 10)
-            if torso_bad:
-                use_residual_this_step = False
-                print(f"[WARNING] TORSO BAD - Residual DISABLED")
+        # if use_residual_this_step:
+        #     # check torso
+        #     waist_yaw = self.low_state.motor_state[12].q
+        #     waist_roll = self.low_state.motor_state[13].q
+        #     waist_pitch = self.low_state.motor_state[14].q
+        #     waist_euler_xyz = np.array([waist_roll, waist_pitch, waist_yaw])
+        #     pelvis_quat = self.low_state.imu_state.quaternion
+        #     torso_bad = is_torso_bad_orientation(waist_euler_xyz, pelvis_quat, 10)
+        #     if torso_bad:
+        #         use_residual_this_step = False
+        #         print(f"[WARNING] TORSO BAD - Residual DISABLED")
 
-            # check object
-            if use_residual_this_step and self.apriltag_detector is not None:
-                object_quat = self.apriltag_detector.get_last_quat()
-                object_bad = is_object_bad_orientation(waist_euler_xyz, pelvis_quat, object_quat, 30)
-                if object_bad:
-                    use_residual_this_step = False
-                    print(f"[WARNING] OBJECT BAD - Residual DISABLED")
+        #     # check object
+        #     if use_residual_this_step and self.apriltag_detector is not None:
+        #         object_quat = self.apriltag_detector.get_last_quat()
+        #         object_bad = is_object_bad_orientation(waist_euler_xyz, pelvis_quat, object_quat, 30)
+        #         if object_bad:
+        #             use_residual_this_step = False
+        #             print(f"[WARNING] OBJECT BAD - Residual DISABLED")
 
 
         if use_residual_this_step:
@@ -428,7 +428,7 @@ class Controller:
 
         # check joint limit
         in_upper_limit = self.check_joint_limit(upper_body_target, self.upper_body_soft_limit)
-        in_lower_limit = self.check_joint_limit(lower_body_target[:11], (self.lower_body_soft_limit[0][:11],self.lower_body_soft_limit[1][:11]))
+        in_lower_limit = self.check_joint_limit(lower_body_target[3:11], (self.lower_body_soft_limit[0][3:11],self.lower_body_soft_limit[1][3:11]))
 
         if not in_upper_limit or not in_lower_limit:
             print(f"[WARNING] JOINT LIMIT VIOLATION - SKIPPING COMMAND")
